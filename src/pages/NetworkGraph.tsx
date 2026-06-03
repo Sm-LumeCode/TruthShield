@@ -1,0 +1,377 @@
+import { useState, useMemo, useRef, useCallback } from 'react';
+import CytoscapeComponent from 'react-cytoscapejs';
+import cytoscape from 'cytoscape';
+import { useAppContext, type User } from '../context/AppContext';
+import { ZoomIn, ZoomOut, Maximize, Settings2, ShieldCheck, Bug, Network } from 'lucide-react';
+import { cn } from '../lib/utils';
+
+// Define community colors
+const communityColors = {
+  1: '#E8453C', // Red
+  2: '#4A90D9', // Blue
+  3: '#2ECC71', // Green
+  4: '#F5A623', // Orange
+  5: '#9B59B6', // Purple
+};
+
+export default function NetworkGraph() {
+  const { users, edges, detectCommunities } = useAppContext();
+  const [layoutName, setLayoutName] = useState<'cose' | 'grid' | 'circle' | 'concentric'>('cose');
+  const [showLabels, setShowLabels] = useState(false);
+  const [selectedUser, setSelectedUser] = useState<User | null>(null);
+  
+  const cyRef = useRef<cytoscape.Core | null>(null);
+
+  // Convert context data to Cytoscape elements
+  const elements = useMemo(() => {
+    const cyNodes = users.map(user => {
+      // Calculate a base size, scaling up if they have more followers.
+      const size = 15 + Math.min(user.followers * 2, 40); 
+      
+      return {
+        data: { 
+          id: user.id, 
+          label: user.username,
+          community: user.community,
+          followers: user.followers,
+          size,
+          color: communityColors[user.community as keyof typeof communityColors] || '#ccc',
+          isInfected: user.isInfected,
+          isProtected: user.isProtected,
+          rawUser: user
+        }
+      };
+    });
+
+    const cyEdges = edges.map((edge, i) => ({
+      data: {
+        id: `e${i}`,
+        source: edge.source,
+        target: edge.target
+      }
+    }));
+
+    return [...cyNodes, ...cyEdges];
+  }, [users, edges]);
+
+  // Cy stylesheet
+  const stylesheet = useMemo<cytoscape.StylesheetStyle[]>(() => [
+    {
+      selector: 'node',
+      style: {
+        'width': 'data(size)',
+        'height': 'data(size)',
+        'background-color': 'data(color)',
+        'label': showLabels ? 'data(label)' : '',
+        'color': '#fff',
+        'font-size': '10px',
+        'text-valign': 'bottom',
+        'text-halign': 'center',
+        'text-margin-y': 4,
+        'border-width': 2,
+        'border-color': '#161B22',
+        'transition-property': 'background-color, border-color, border-width, width, height',
+        'transition-duration': 300
+      }
+    },
+    {
+      selector: 'node[?isInfected]',
+      style: {
+        'background-color': '#FF3333',
+        'border-color': '#FF0000',
+        'border-width': 4,
+        'underlay-color': '#FF0000',
+        'underlay-padding': 6,
+        'underlay-opacity': 0.6,
+      }
+    },
+    {
+      selector: 'node[?isProtected]',
+      style: {
+        'border-color': '#2ECC71',
+        'border-width': 4,
+        'border-style': 'double'
+      }
+    },
+    {
+      selector: 'edge',
+      style: {
+        'width': 1.5,
+        'line-color': '#30363D',
+        'target-arrow-color': '#30363D',
+        'target-arrow-shape': 'triangle',
+        'curve-style': 'bezier',
+        'opacity': 0.6,
+        'transition-property': 'line-color, target-arrow-color, width',
+        'transition-duration': 200
+      }
+    },
+    {
+      selector: 'node.hover-highlight',
+      style: {
+        'border-width': 4,
+        'border-color': '#F5A623'
+      }
+    },
+    {
+      selector: 'edge.hover-highlight',
+      style: {
+        'line-color': '#F5A623',
+        'target-arrow-color': '#F5A623',
+        'width': 3,
+        'opacity': 1,
+        'z-index': 10
+      }
+    },
+    {
+      selector: 'node.faded',
+      style: {
+        'opacity': 0.2
+      }
+    },
+    {
+      selector: 'edge.faded',
+      style: {
+        'opacity': 0.1
+      }
+    }
+  ], [showLabels]);
+
+  const handleZoom = (direction: 'in' | 'out' | 'fit') => {
+    if (!cyRef.current) return;
+    if (direction === 'fit') {
+      cyRef.current.fit(undefined, 50);
+    } else {
+      const zoom = cyRef.current.zoom();
+      cyRef.current.zoom({
+        level: direction === 'in' ? zoom * 1.5 : zoom / 1.5,
+        renderedPosition: { x: cyRef.current.width() / 2, y: cyRef.current.height() / 2 }
+      });
+    }
+  };
+
+  const onCyInit = useCallback((cy: cytoscape.Core) => {
+    cyRef.current = cy;
+    
+    // Interactions
+    cy.on('tap', 'node', (evt) => {
+      const node = evt.target;
+      setSelectedUser(node.data('rawUser'));
+    });
+
+    cy.on('tap', (evt) => {
+      if (evt.target === cy) {
+        setSelectedUser(null);
+      }
+    });
+
+    cy.on('mouseover', 'node', (evt) => {
+      const node = evt.target;
+      cy.elements().removeClass('hover-highlight faded');
+      cy.elements().difference(node.neighborhood().union(node)).addClass('faded');
+      node.addClass('hover-highlight');
+      node.connectedEdges().addClass('hover-highlight');
+    });
+
+    cy.on('mouseout', 'node', () => {
+      cy.elements().removeClass('hover-highlight faded');
+    });
+
+  }, []);
+
+  // Compute community stats
+  const communityStats = useMemo(() => {
+    const stats: Record<number, { size: number, internalEdges: number, influencers: {id:string, degree:number}[] }> = {};
+    for (let i = 1; i <= 5; i++) stats[i] = { size: 0, internalEdges: 0, influencers: [] };
+    
+    // Degrees for influencers
+    const inDegrees = new Map<string, number>();
+    users.forEach(u => inDegrees.set(u.id, 0));
+    edges.forEach(e => inDegrees.set(e.target, inDegrees.get(e.target)! + 1));
+
+    users.forEach(u => {
+      if (stats[u.community]) {
+        stats[u.community].size++;
+        stats[u.community].influencers.push({ id: u.username, degree: inDegrees.get(u.id)! });
+      }
+    });
+
+    edges.forEach(e => {
+      const src = users.find(u => u.id === e.source);
+      const tgt = users.find(u => u.id === e.target);
+      if (src && tgt && src.community === tgt.community && stats[src.community]) {
+        stats[src.community].internalEdges++;
+      }
+    });
+
+    for (let i = 1; i <= 5; i++) {
+      stats[i].influencers.sort((a,b) => b.degree - a.degree);
+      stats[i].influencers = stats[i].influencers.slice(0, 2);
+    }
+    return stats;
+  }, [users, edges]);
+
+  return (
+    <div className="h-full flex flex-col -m-4 md:-m-6 relative">
+      {/* Top Header Overlay */}
+      <div className="absolute top-6 left-6 z-10 pointer-events-none">
+        <h2 className="text-2xl font-semibold text-white tracking-tight drop-shadow-md">Network Graph</h2>
+        <p className="text-sm text-gray-300 mt-1 drop-shadow-md">Visualizing {users.length} nodes and {edges.length} connections.</p>
+      </div>
+
+      {/* Main Cytoscape View */}
+      <div className="flex-1 bg-background relative overflow-hidden">
+        <CytoscapeComponent
+          elements={elements}
+          stylesheet={stylesheet}
+          style={{ width: '100%', height: '100%' }}
+          layout={{ name: layoutName, animate: true }}
+          cy={(cy) => onCyInit(cy)}
+          minZoom={0.2}
+          maxZoom={3}
+        />
+      </div>
+
+      {/* Right Controls Panel */}
+      <div className="absolute top-6 right-6 w-64 bg-surface/90 backdrop-blur-md border border-borderColor rounded-xl p-4 shadow-xl z-10 flex flex-col gap-4">
+        <div className="flex items-center gap-2 font-medium mb-1">
+          <Settings2 className="w-4 h-4" /> Controls
+        </div>
+        
+        <button onClick={detectCommunities} className="w-full py-2 bg-shieldBlue hover:bg-shieldBlue/90 text-white rounded-md text-sm font-medium transition-colors flex items-center justify-center gap-2">
+          <Network className="w-4 h-4" /> Detect Communities
+        </button>
+
+        <div>
+          <label className="text-xs text-gray-400 mb-1.5 block">Layout Algorithm</label>
+          <select 
+            value={layoutName} 
+            onChange={(e) => setLayoutName(e.target.value as any)}
+            className="w-full bg-background border border-white/10 rounded-md text-sm text-white px-3 py-2 outline-none focus:border-shieldBlue"
+          >
+            <option value="cose">Force-directed (CoSE)</option>
+            <option value="circle">Circular</option>
+            <option value="grid">Grid</option>
+            <option value="concentric">Concentric</option>
+          </select>
+        </div>
+
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-gray-300">Show Node Labels</span>
+          <button 
+            onClick={() => setShowLabels(!showLabels)}
+            className={cn(
+              "relative inline-flex h-5 w-9 items-center rounded-full transition-colors",
+              showLabels ? "bg-shieldBlue" : "bg-gray-600"
+            )}
+          >
+            <span className={cn(
+              "inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform",
+              showLabels ? "translate-x-4" : "translate-x-1"
+            )} />
+          </button>
+        </div>
+
+        <div className="border-t border-white/10 pt-4 flex gap-2 justify-center">
+          <button onClick={() => handleZoom('out')} className="p-2 bg-background hover:bg-white/5 border border-white/10 rounded-md text-gray-300 hover:text-white transition-colors" title="Zoom Out">
+            <ZoomOut className="w-4 h-4" />
+          </button>
+          <button onClick={() => handleZoom('fit')} className="p-2 bg-background hover:bg-white/5 border border-white/10 rounded-md text-gray-300 hover:text-white transition-colors" title="Fit to Screen">
+            <Maximize className="w-4 h-4" />
+          </button>
+          <button onClick={() => handleZoom('in')} className="p-2 bg-background hover:bg-white/5 border border-white/10 rounded-md text-gray-300 hover:text-white transition-colors" title="Zoom In">
+            <ZoomIn className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+
+      {/* Node Details Popup (if selected) */}
+      {selectedUser && (
+        <div className="absolute bottom-6 right-6 w-64 bg-surface border border-white/10 rounded-xl p-4 shadow-2xl z-10 animate-in slide-in-from-bottom-4">
+          <div className="flex items-start justify-between">
+            <div className="flex items-center gap-3">
+              <div 
+                className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-white shadow-inner"
+                style={{ backgroundColor: communityColors[selectedUser.community as keyof typeof communityColors] }}
+              >
+                {selectedUser.avatar}
+              </div>
+              <div>
+                <h4 className="text-white font-semibold leading-tight">{selectedUser.name}</h4>
+                <p className="text-xs text-gray-400">{selectedUser.username}</p>
+              </div>
+            </div>
+            <button onClick={() => setSelectedUser(null)} className="text-gray-500 hover:text-white">✕</button>
+          </div>
+          
+          <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
+            <div className="bg-background rounded px-3 py-2 border border-white/5">
+              <p className="text-xs text-gray-500">Community</p>
+              <p className="font-medium text-gray-200">{selectedUser.community}</p>
+            </div>
+            <div className="bg-background rounded px-3 py-2 border border-white/5">
+              <p className="text-xs text-gray-500">Followers</p>
+              <p className="font-medium text-gray-200">{selectedUser.followers}</p>
+            </div>
+          </div>
+          
+          {(selectedUser.isInfected || selectedUser.isProtected) && (
+            <div className="mt-3 flex gap-2">
+              {selectedUser.isInfected && (
+                <div className="flex-1 bg-shieldRed/10 border border-shieldRed/30 text-shieldRed rounded py-1.5 px-2 text-xs font-medium flex items-center justify-center gap-1.5">
+                  <Bug className="w-3.5 h-3.5" /> Infected
+                </div>
+              )}
+              {selectedUser.isProtected && (
+                <div className="flex-1 bg-shieldGreen/10 border border-shieldGreen/30 text-shieldGreen rounded py-1.5 px-2 text-xs font-medium flex items-center justify-center gap-1.5">
+                  <ShieldCheck className="w-3.5 h-3.5" /> Protected
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Legend & Communities Panel */}
+      <div className="absolute bottom-6 left-6 flex flex-col gap-4 z-10 max-w-sm">
+        <div className="bg-surface/90 backdrop-blur-md border border-borderColor rounded-xl p-4 shadow-xl text-sm">
+          <h4 className="font-semibold mb-3 border-b border-borderColor pb-2">Community Analysis</h4>
+          <div className="space-y-3 max-h-48 overflow-y-auto pr-2">
+            {[1, 2, 3, 4, 5].map(id => {
+              const stat = communityStats[id];
+              if (stat.size === 0) return null;
+              const riskLevel = stat.internalEdges > stat.size * 1.5 ? 'High' : (stat.internalEdges > stat.size ? 'Medium' : 'Low');
+              const riskColor = riskLevel === 'High' ? 'text-shieldRed' : (riskLevel === 'Medium' ? 'text-shieldOrange' : 'text-shieldGreen');
+              return (
+                <div key={id} className="flex gap-3 text-xs">
+                  <div className="w-3 h-3 rounded-full mt-1 shrink-0" style={{ backgroundColor: communityColors[id as keyof typeof communityColors] }} />
+                  <div>
+                    <div className="flex justify-between items-center gap-4">
+                      <span className="font-medium">Community {id}</span>
+                      <span className="text-textSecondary text-[10px]">{stat.size} nodes</span>
+                    </div>
+                    <p className="text-textSecondary mt-0.5">Top: {stat.influencers.map(i => i.id).join(', ')}</p>
+                    <p className="mt-0.5">Risk: <span className={`font-medium ${riskColor}`}>{riskLevel}</span></p>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+
+        <div className="bg-surface/90 backdrop-blur-md border border-borderColor rounded-xl p-3 shadow-xl flex gap-6 text-xs text-textSecondary">
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2">
+              <div className="w-3 h-3 rounded-full bg-[#FF3333] shadow-[0_0_8px_#FF0000]" />
+              <span>Infected</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-3 h-3 rounded-full border-2 border-shieldGreen border-double bg-background" />
+              <span>Protected</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

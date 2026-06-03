@@ -1,0 +1,27 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --bg-color: #F0F2F5;
+    --surface-color: #FFFFFF;
+    --text-primary: #1F2937;
+    --text-secondary: #4B5563;
+    --border-color: rgba(0,0,0,0.1);
+  }
+
+  .dark {
+    --bg-color: #0D1117;
+    --surface-color: #161B22;
+    --text-primary: #E5E7EB;
+    --text-secondary: #9CA3AF;
+    --border-color: rgba(255,255,255,0.05);
+  }
+
+  body {
+    background-color: var(--bg-color);
+    color: var(--text-primary);
+    @apply antialiased transition-colors duration-300;
+  }
+}
