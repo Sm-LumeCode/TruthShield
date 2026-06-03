@@ -1,73 +1,86 @@
-# React + TypeScript + Vite
+# TruthShield 🛡️
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+**TruthShield** is a dynamic, interactive web-based simulator designed to model, analyze, and mitigate the spread of misinformation across social networks. Built with React, TypeScript, and Vite, it serves as a powerful educational and research tool for analyzing graph algorithms in the context of network epidemiology.
 
-Currently, two official plugins are available:
+---
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## 🌟 Key Features
 
-## React Compiler
+### 1. 📊 Interactive Dashboard
+A real-time command center that gives you an overview of the network's health.
+- Live statistics tracking Users, Connections, Communities, and Total Infections.
+- **Simulation History**: Keeps a log of all past simulations and applied interventions, allowing you to track algorithmic performance over time.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+### 2. 🌐 Social Feed
+Live monitoring of network activity through a customized, X/Twitter-style interface.
+- Filters to sort by All Posts, Flagged Misinformation, and Most Shared.
+- Interactive actions to flag posts and view simulated user profiles.
 
-## Expanding the ESLint configuration
+### 3. 🕸️ Network Graph (Cytoscape.js)
+A fully interactive visualization of the 100-node social graph.
+- **Community Detection**: Uses a heuristic, Louvain-inspired algorithm to cluster the network into 5 modular communities.
+- **Dynamic Styling**: Node sizes dynamically scale based on their in-degree (follower count).
+- **Infection Visualization**: Infected nodes pulse in red, while protected nodes feature a green shield overlay.
+- Complete control panel for layout switching (Grid, Circular, Force-directed) and zooming.
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+### 4. 📈 Spread Simulation (BFS)
+Models the rapid transmission of fake news starting from a "Patient Zero".
+- Powered by a probabilistic **Breadth-First Search (BFS)** traversal algorithm.
+- Interactive controls allow you to tweak the **Spread Probability** parameter.
+- Features live infection rate tracking and a step-by-step animated visual timeline mapping out infection waves.
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+### 5. 🛡️ Algorithmic Intervention
+Battle-tests two distinct algorithmic strategies designed to halt misinformation.
+- **Degree Centrality**: An $O(V+E)$ heuristic approach that calculates in-degrees to isolate and protect the network's largest hubs.
+- **Greedy Optimization**: An exhaustive $O(K \cdot V \cdot (V+E))$ algorithm that tests all possible intervention combinations to mathematically minimize spread.
+- Instantly visualizes the percentage reduction and highlights the selected nodes against a controlled deterministic baseline.
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+### 6. 📉 Analytics Dashboard (Recharts)
+A comprehensive $2 \times 2$ grid of analytics comparing the strategies.
+- Side-by-side Bar Charts comparing infection counts for *Baseline, Random, Degree, and Greedy*.
+- Cumulative Infection Wave line charts tracking velocity over time.
+- Pie charts identifying highest-risk communities.
+- Horizontal ranking of Top 10 Influencers and their protection status.
+- Export results directly to JSON.
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+---
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+## 🚀 Quick Start Guide
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+### Prerequisites
+Make sure you have [Node.js](https://nodejs.org/) installed on your machine.
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+### Installation
+1. Clone the repository and navigate into the directory:
+   ```bash
+   cd TruthShield
+   ```
+2. Install the necessary dependencies:
+   ```bash
+   npm install
+   ```
+3. Start the development server:
+   ```bash
+   npm run dev
+   ```
+4. Open the provided localhost URL in your browser to access TruthShield.
+
+### Navigation Shortcuts
+- Press <kbd>R</kbd> anywhere to quickly jump to the **Spread Simulation**.
+- Press <kbd>I</kbd> anywhere to jump to the **Intervention Strategies** page.
+- Toggle the **Dark/Light Theme** using the moon/sun icon in the top navigation bar.
+
+---
+
+## 🛠️ Technology Stack
+- **Framework**: React 18 + Vite
+- **Language**: TypeScript
+- **Styling**: Tailwind CSS v3
+- **Animations**: Framer Motion
+- **Graph Visualization**: Cytoscape.js & react-cytoscapejs
+- **Charts**: Recharts
+- **Icons**: Lucide React
+
+---
+
+*TruthShield · Design & Analysis of Algorithms · Graph Algorithms · Social Network Simulation*
