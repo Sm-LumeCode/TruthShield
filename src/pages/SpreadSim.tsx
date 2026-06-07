@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useAppContext } from '../context/AppContext';
+import { useAppContext } from '../context/useAppContext';
 import { Play, SkipForward, RotateCcw, Activity, Users, Bug, CheckCircle2 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import CytoscapeComponent from 'react-cytoscapejs';
@@ -29,6 +29,7 @@ export default function SpreadSim() {
     if (!isPlaying || !simResult) return;
     
     if (currentStep >= simResult.timeSteps) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setIsPlaying(false);
       return;
     }

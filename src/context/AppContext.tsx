@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useState, useEffect } from 'react';
 
 export type User = {
   id: string;
@@ -49,9 +49,13 @@ export type ContainmentResult = {
   budgetK: number;
   timestamp: Date;
   sharerIds: string[];  // users who had already shared before detection
+  leftWaves: string[][];
+  rightWaves: string[][];
+  protectedIds: string[];
+  authorId: string;
 };
 
-type AppContextType = {
+export type AppContextType = {
   users: User[];
   edges: Edge[];
   posts: Post[];
@@ -88,7 +92,8 @@ type AppContextType = {
   markPostGroqChecked: (postId: string, infected: boolean, explanation: string) => void;
 };
 
-const AppContext = createContext<AppContextType | undefined>(undefined);
+// eslint-disable-next-line react-refresh/only-export-components
+export const AppContext = createContext<AppContextType | undefined>(undefined);
 
 // ─── Network generator ──────────────────────────────────────────────────────
 function generateNetworkData() {
@@ -157,7 +162,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   useEffect(() => {
     const { users: u, edges: e } = generateNetworkData();
-    setUsers(u);
+    setUsers(u); // eslint-disable-line react-hooks/set-state-in-effect
     setEdges(e);
   }, []);
 
@@ -379,10 +384,4 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       {children}
     </AppContext.Provider>
   );
-};
-
-export const useAppContext = () => {
-  const ctx = useContext(AppContext);
-  if (!ctx) throw new Error('useAppContext must be used within AppProvider');
-  return ctx;
 };

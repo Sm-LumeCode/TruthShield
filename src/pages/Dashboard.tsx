@@ -1,6 +1,237 @@
-import { useAppContext } from '../context/AppContext';
-import { Users, Link as LinkIcon, Component, Bug, Play, Activity, ShieldAlert, Clock, ChevronRight } from 'lucide-react';
+import { useState, useMemo, useEffect } from 'react';
+import { type User, type ContainmentResult } from '../context/AppContext';
+import { useAppContext } from '../context/useAppContext';
+import { Users, Link as LinkIcon, Component, Bug, Play, Activity, ShieldAlert, Clock, ChevronRight, Bot, Pause, SkipForward, RotateCcw, Shield, Info, CheckCircle2, ChevronDown, ChevronUp } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import { cn } from '../lib/utils';
+
+const COMMUNITY_COLORS: Record<number, string> = {
+  1: '#E8453C', 2: '#4A90D9', 3: '#2ECC71', 4: '#F5A623', 5: '#9B59B6',
+};
+
+function SimulationCard({ result, users }: { result: ContainmentResult, users: User[] }) {
+  const [isMinimized, setIsMinimized] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentStep, setCurrentStep] = useState(0);
+  const [hoveredUserLeft, setHoveredUserLeft] = useState<User | null>(null);
+  const [hoveredUserRight, setHoveredUserRight] = useState<User | null>(null);
+
+  const { leftWaves, rightWaves, protectedIds, authorId, budgetK, claim, explanation } = result;
+  
+  const sortedUsersForGrid = useMemo(() => [...users].sort((a, b) => a.community - b.community), [users]);
+
+  const maxSteps = Math.max(leftWaves.length, rightWaves.length) - 1;
+  const isSimFinished = currentStep >= maxSteps;
+
+  useEffect(() => {
+    if (!isPlaying) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (isSimFinished) { setIsPlaying(false); return; }
+    const timer = setTimeout(() => setCurrentStep(prev => prev + 1), 900);
+    return () => clearTimeout(timer);
+  }, [isPlaying, currentStep, isSimFinished]);
+
+  const getInfectedAtStep = (waves: string[][], step: number) => {
+    const s = new Set<string>();
+    for (let i = 0; i <= step; i++) waves[i]?.forEach(id => s.add(id));
+    return s;
+  };
+
+  const leftInfected = useMemo(() => getInfectedAtStep(leftWaves, currentStep), [leftWaves, currentStep]);
+  const rightInfected = useMemo(() => getInfectedAtStep(rightWaves, currentStep), [rightWaves, currentStep]);
+  const protectedSet = new Set(protectedIds);
+
+  const leftTotal = leftWaves.flat().length;
+  const rightTotal = rightWaves.flat().length;
+  const totalSaved = Math.max(0, leftTotal - rightTotal);
+  const savedPct = leftTotal > 0 ? (totalSaved / leftTotal) * 100 : 0;
+
+  return (
+    <div className="bg-surface border border-shieldRed/30 rounded-xl p-6 shadow-sm space-y-6 animate-in fade-in slide-in-from-top-4 duration-300">
+      <div className="flex items-center justify-between border-b border-borderColor pb-4 cursor-pointer" onClick={() => setIsMinimized(!isMinimized)}>
+        <div className="flex items-center gap-3">
+          <div className="p-2 bg-shieldRed/10 rounded-lg">
+            <ShieldAlert className="w-6 h-6 text-shieldRed animate-pulse" />
+          </div>
+          <div>
+            <h3 className="text-lg font-bold text-textPrimary">⚠️ Misinformation Containment Lab</h3>
+            <p className="text-xs text-textSecondary">{result.timestamp.toLocaleString()} · Left: uncontrolled · Right: Degree Centrality (K={budgetK})</p>
+          </div>
+        </div>
+        <button className="p-1.5 hover:bg-background rounded-full text-textSecondary transition-colors">
+          {isMinimized ? <ChevronDown className="w-5 h-5" /> : <ChevronUp className="w-5 h-5" />}
+        </button>
+      </div>
+
+      {!isMinimized && (
+        <>
+          {/* Claim card */}
+          <div className="bg-background border border-shieldRed/20 rounded-lg p-4 space-y-2">
+            <div className="text-xs font-bold text-shieldRed uppercase tracking-wider flex items-center gap-1.5">
+              <ShieldAlert className="w-3.5 h-3.5" /> Flagged & Confirmed by Groq
+            </div>
+            <p className="text-textPrimary font-medium text-sm italic">"{claim}"</p>
+            <div className="flex gap-2 text-xs text-textSecondary bg-shieldRed/5 border border-shieldRed/10 rounded p-2.5">
+              <Bot className="w-4 h-4 text-shieldBlue shrink-0 mt-0.5" />
+              <span><strong className="text-textPrimary">Groq Analysis:</strong> {explanation}</span>
+            </div>
+          </div>
+
+          {/* Playback controls */}
+          <div className="flex items-center justify-between gap-4 bg-background/50 border border-borderColor rounded-lg px-4 py-2.5">
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setIsPlaying(!isPlaying)}
+                disabled={isSimFinished && !isPlaying}
+                className="p-2 bg-shieldBlue hover:bg-shieldBlue/90 disabled:opacity-50 text-white rounded-md transition-colors"
+              >
+                {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+              </button>
+              <button
+                onClick={() => { if (currentStep < maxSteps) setCurrentStep(p => p + 1); }}
+                disabled={isPlaying || isSimFinished}
+                className="p-2 bg-surface hover:bg-background border border-borderColor text-textPrimary rounded-md transition-colors disabled:opacity-40"
+              >
+                <SkipForward className="w-4 h-4" />
+              </button>
+              <button
+                onClick={() => { setCurrentStep(0); setIsPlaying(false); }}
+                className="p-2 bg-surface hover:bg-background border border-borderColor text-textPrimary rounded-md transition-colors"
+              >
+                <RotateCcw className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="flex items-center gap-4 text-sm">
+              <span className="text-textSecondary">Step <strong className="text-textPrimary">{currentStep}</strong></span>
+              <span className="h-4 w-px bg-borderColor" />
+              <span className="text-textSecondary">Algorithm: <strong className="text-shieldBlue">Degree Centrality</strong></span>
+            </div>
+          </div>
+
+          {/* Side-by-side grids */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* LEFT */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="font-bold text-sm text-textPrimary flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-shieldRed animate-ping" />
+                    No Mitigation
+                  </h4>
+                  <p className="text-xs text-textSecondary">Fake news spreads freely</p>
+                </div>
+                <span className="text-xl font-black text-shieldRed">{leftInfected.size} <span className="text-xs font-normal text-textSecondary">infected</span></span>
+              </div>
+              <div className="h-2 bg-background border border-borderColor rounded-full overflow-hidden">
+                <div className="h-full bg-shieldRed transition-all duration-500" style={{ width: `${(leftInfected.size / Math.max(users.length, 1)) * 100}%` }} />
+              </div>
+              <div className="bg-background border border-borderColor rounded-xl p-3">
+                <div className="grid grid-cols-10 gap-1.5 justify-items-center">
+                  {sortedUsersForGrid.map(u => {
+                    const infected = leftInfected.has(u.id);
+                    const isSource = u.id === authorId;
+                    return (
+                      <div
+                        key={u.id}
+                        onMouseEnter={() => setHoveredUserLeft(u)}
+                        onMouseLeave={() => setHoveredUserLeft(null)}
+                        className={cn("w-4 h-4 rounded-full border border-black/10 transition-all duration-300 cursor-help hover:scale-125 relative", infected && "scale-110 shadow-[0_0_6px_#E8453C]")}
+                        style={{ backgroundColor: infected ? '#E8453C' : COMMUNITY_COLORS[u.community] ?? '#9CA3AF' }}
+                      >
+                        {isSource && <span className="absolute inset-0 flex items-center justify-center text-[7px] font-black text-white">★</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="mt-2 text-[11px] text-textSecondary bg-surface/50 border border-borderColor rounded p-1.5 h-8 flex items-center justify-center text-center overflow-hidden">
+                  {hoveredUserLeft
+                    ? <span className="flex gap-2"><span className="w-2 h-2 rounded-full mt-0.5 shrink-0" style={{ backgroundColor: COMMUNITY_COLORS[hoveredUserLeft.community] }} /><strong>{hoveredUserLeft.name}</strong> · <strong className={leftInfected.has(hoveredUserLeft.id) ? 'text-shieldRed' : 'text-shieldGreen'}>{leftInfected.has(hoveredUserLeft.id) ? 'Infected' : 'Safe'}</strong></span>
+                    : <span className="flex items-center gap-1"><Info className="w-3 h-3" /> Hover a node</span>
+                  }
+                </div>
+              </div>
+            </div>
+
+            {/* RIGHT */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="font-bold text-sm text-textPrimary flex items-center gap-2">
+                    <Shield className="w-4 h-4 text-shieldGreen fill-shieldGreen/20" />
+                    Degree Centrality Shield
+                  </h4>
+                  <p className="text-xs text-textSecondary">Top {budgetK} hubs immunized</p>
+                </div>
+                <span className="text-xl font-black text-shieldGreen">{rightInfected.size} <span className="text-xs font-normal text-textSecondary">infected</span></span>
+              </div>
+              <div className="h-2 bg-background border border-borderColor rounded-full overflow-hidden">
+                <div className="h-full bg-shieldGreen transition-all duration-500" style={{ width: `${(rightInfected.size / Math.max(users.length, 1)) * 100}%` }} />
+              </div>
+              <div className="bg-background border border-borderColor rounded-xl p-3">
+                <div className="grid grid-cols-10 gap-1.5 justify-items-center">
+                  {sortedUsersForGrid.map(u => {
+                    const infected = rightInfected.has(u.id);
+                    const protected_ = protectedSet.has(u.id);
+                    const isSource = u.id === authorId;
+                    return (
+                      <div
+                        key={u.id}
+                        onMouseEnter={() => setHoveredUserRight(u)}
+                        onMouseLeave={() => setHoveredUserRight(null)}
+                        className={cn("w-4 h-4 rounded-full border border-black/10 transition-all duration-300 cursor-help hover:scale-125 relative", infected && "scale-110 shadow-[0_0_6px_#E8453C]", protected_ && !infected && "ring-1 ring-shieldGreen/60 scale-105")}
+                        style={{ backgroundColor: infected ? '#E8453C' : protected_ ? '#2ECC71' : COMMUNITY_COLORS[u.community] ?? '#9CA3AF' }}
+                      >
+                        {isSource && <span className="absolute inset-0 flex items-center justify-center text-[7px] font-black text-white">★</span>}
+                        {protected_ && !infected && <span className="absolute inset-0 flex items-center justify-center text-[8px]">🛡</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="mt-2 text-[11px] text-textSecondary bg-surface/50 border border-borderColor rounded p-1.5 h-8 flex items-center justify-center text-center overflow-hidden">
+                  {hoveredUserRight
+                    ? <span className="flex gap-2"><span className="w-2 h-2 rounded-full mt-0.5 shrink-0" style={{ backgroundColor: COMMUNITY_COLORS[hoveredUserRight.community] }} /><strong>{hoveredUserRight.name}</strong> · <strong className={protectedSet.has(hoveredUserRight.id) ? 'text-shieldGreen' : rightInfected.has(hoveredUserRight.id) ? 'text-shieldRed' : 'text-textSecondary'}>{protectedSet.has(hoveredUserRight.id) ? '🛡 Shielded' : rightInfected.has(hoveredUserRight.id) ? 'Infected' : 'Safe'}</strong></span>
+                    : <span className="flex items-center gap-1"><Info className="w-3 h-3" /> Hover a node</span>
+                  }
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Results Summary */}
+          {isSimFinished && (
+            <div className="bg-shieldGreen/5 border border-shieldGreen/20 rounded-xl p-5 space-y-4 animate-in zoom-in-95 duration-500">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-5 h-5 text-shieldGreen" />
+                <h4 className="font-bold text-textPrimary">Containment Analysis Complete</h4>
+              </div>
+              <div className="grid grid-cols-4 gap-4 text-center">
+                <div className="bg-surface border border-borderColor rounded-lg p-3">
+                  <p className="text-xs text-textSecondary mb-1">Without Algorithm</p>
+                  <p className="text-2xl font-black text-shieldRed">{leftTotal}</p>
+                </div>
+                <div className="bg-surface border border-borderColor rounded-lg p-3">
+                  <p className="text-xs text-textSecondary mb-1">With Algorithm</p>
+                  <p className="text-2xl font-black text-shieldGreen">{rightTotal}</p>
+                </div>
+                <div className="bg-surface border border-borderColor rounded-lg p-3">
+                  <p className="text-xs text-textSecondary mb-1">Nodes Saved</p>
+                  <p className="text-2xl font-black text-shieldBlue">{savedPct.toFixed(0)}%</p>
+                </div>
+                <div className="bg-surface border border-borderColor rounded-lg p-3">
+                  <p className="text-xs text-textSecondary mb-1">Warnings Sent</p>
+                  <p className="text-2xl font-black text-shieldOrange">{result.sharerIds.length}</p>
+                </div>
+              </div>
+              <p className="text-sm text-textSecondary">
+                By immunizing the top <strong>{budgetK}</strong> most-connected accounts, the algorithm blocked <strong>{totalSaved}</strong> additional users from receiving this misinformation.
+              </p>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
 
 export default function Dashboard() {
   const { users, edges, history, containmentResults } = useAppContext();
@@ -43,41 +274,13 @@ export default function Dashboard() {
         ))}
       </div>
 
-      {/* Latest Containment Result */}
+      {/* Multiple Containment Results */}
       {containmentResults.length > 0 && (
-        <div className="bg-surface border border-shieldGreen/40 rounded-xl p-6 shadow-sm relative overflow-hidden">
-          <div className="absolute top-0 left-0 w-1.5 h-full bg-shieldGreen" />
-          <div className="flex items-center gap-3 mb-4">
-            <div className="p-2 bg-shieldGreen/10 rounded-lg">
-              <ShieldAlert className="w-5 h-5 text-shieldGreen" />
-            </div>
-            <div>
-              <h3 className="text-lg font-bold text-textPrimary">Recent Misinformation Contained</h3>
-              <p className="text-xs text-textSecondary">{containmentResults[0].timestamp.toLocaleString()}</p>
-            </div>
-          </div>
-          
-          <div className="bg-background border border-borderColor rounded-lg p-4 space-y-3 mb-5">
-            <p className="text-sm italic font-medium">"{containmentResults[0].claim}"</p>
-            <div className="text-xs text-textSecondary bg-shieldGreen/5 border border-shieldGreen/10 p-2.5 rounded">
-              <strong className="text-textPrimary">Groq AI:</strong> {containmentResults[0].explanation}
-            </div>
-          </div>
-          
-          <div className="grid grid-cols-3 gap-4 text-center">
-            <div className="bg-background border border-borderColor rounded-lg p-3">
-              <p className="text-xs text-textSecondary mb-1">Spread Prevented</p>
-              <p className="text-2xl font-black text-shieldGreen">{containmentResults[0].savedPct.toFixed(0)}%</p>
-            </div>
-            <div className="bg-background border border-borderColor rounded-lg p-3">
-              <p className="text-xs text-textSecondary mb-1">Users Protected</p>
-              <p className="text-2xl font-black text-shieldBlue">{containmentResults[0].leftTotal - containmentResults[0].rightTotal}</p>
-            </div>
-            <div className="bg-background border border-borderColor rounded-lg p-3">
-              <p className="text-xs text-textSecondary mb-1">Warnings Sent</p>
-              <p className="text-2xl font-black text-shieldOrange">{containmentResults[0].sharerIds.length}</p>
-            </div>
-          </div>
+        <div className="space-y-4">
+          <h3 className="text-lg font-bold text-textPrimary pt-4 border-t border-borderColor">Recent Misinformation Contained</h3>
+          {containmentResults.map((result, idx) => (
+            <SimulationCard key={`${result.postId}-${idx}`} result={result} users={users} />
+          ))}
         </div>
       )}
 

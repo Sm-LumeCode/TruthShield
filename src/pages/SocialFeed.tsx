@@ -1,12 +1,11 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
-import { useAppContext, type User } from '../context/AppContext';
+import { useState, useEffect, useRef } from 'react';
+import { type User } from '../context/AppContext';
+import { useAppContext } from '../context/useAppContext';
 import { checkClaimWithGroq } from '../lib/groq';
 import {
   ShieldAlert, Flag, MessageSquare, Heart, Repeat2, Send,
-  Play, Pause, SkipForward, RotateCcw, CheckCircle2,
-  Info, Shield, X, Loader2, Bot, LogIn, LogOut,
-  UserX, UserCheck, ChevronDown, Search, Lock, User as UserIcon,
-  AlertTriangle
+  X, Loader2, Bot, LogIn, LogOut, Info, CheckCircle2,
+  UserX, UserCheck, ChevronDown, Search, Lock, User as UserIcon
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
@@ -18,7 +17,7 @@ const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY as string;
 
 // ─── Account Switcher ────────────────────────────────────────────────────────
 function AccountSwitcher() {
-  const { users, currentUser, login, logout, notify } = useAppContext();
+  const { users, currentUser, login, logout } = useAppContext();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [loginUsername, setLoginUsername] = useState('');
@@ -492,8 +491,8 @@ function PostCard({ post, onGroqTrigger }: {
 // ─── Main Component ──────────────────────────────────────────────────────────
 export default function SocialFeed() {
   const {
-    posts, users, edges, currentUser, sharePost, flagPost, addPost,
-    markPostGroqChecked, addHistory, notify, blockedByCurrentUser,
+    posts, users, edges, currentUser, addPost,
+    markPostGroqChecked, addHistory, notify,
     getVisiblePosts, saveContainmentResult, misinfoWarnings, dismissWarning
   } = useAppContext();
 
@@ -502,24 +501,10 @@ export default function SocialFeed() {
   const [isPosting, setIsPosting] = useState(false);
 
   // Groq / containment state
-  const [groqPostId, setGroqPostId] = useState<string | null>(null);
   const [isGroqChecking, setIsGroqChecking] = useState(false);
-  const [isSimulating, setIsSimulating] = useState(false);
-  const [simClaim, setSimClaim] = useState('');
-  const [simAuthor, setSimAuthor] = useState<User | null>(null);
-  const [simExplanation, setSimExplanation] = useState('');
-  const [currentStep, setCurrentStep] = useState(0);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [leftWaves, setLeftWaves] = useState<string[][]>([]);
-  const [rightWaves, setRightWaves] = useState<string[][]>([]);
-  const [rightProtectedIds, setRightProtectedIds] = useState<Set<string>>(new Set());
-  const [hoveredUserLeft, setHoveredUserLeft] = useState<User | null>(null);
-  const [hoveredUserRight, setHoveredUserRight] = useState<User | null>(null);
 
   const budgetK = 5;
   const spreadProbability = 0.4;
-
-  const sortedUsersForGrid = useMemo(() => [...users].sort((a, b) => a.community - b.community), [users]);
 
   const getDegreeProtected = (k: number, authorId: string): Set<string> => {
     const inDegrees = new Map<string, number>();
@@ -531,23 +516,7 @@ export default function SocialFeed() {
     return new Set(sorted.slice(0, k).map(u => u.id));
   };
 
-  // Playback timer
-  useEffect(() => {
-    if (!isPlaying || !isSimulating) return;
-    const maxSteps = Math.max(leftWaves.length, rightWaves.length) - 1;
-    if (currentStep >= maxSteps) { setIsPlaying(false); return; }
-    const timer = setTimeout(() => setCurrentStep(prev => prev + 1), 900);
-    return () => clearTimeout(timer);
-  }, [isPlaying, currentStep, leftWaves, rightWaves, isSimulating]);
-
-  const getInfectedAtStep = (waves: string[][], step: number) => {
-    const s = new Set<string>();
-    for (let i = 0; i <= step; i++) waves[i]?.forEach(id => s.add(id));
-    return s;
-  };
-
-  const leftInfected = useMemo(() => getInfectedAtStep(leftWaves, currentStep), [leftWaves, currentStep]);
-  const rightInfected = useMemo(() => getInfectedAtStep(rightWaves, currentStep), [rightWaves, currentStep]);
+  // No longer needed: local simulation state handlers
 
   // ── Publish post (no Groq — just post immediately) ────────────────────────
   const handlePublish = async (e: React.FormEvent) => {
@@ -566,7 +535,6 @@ export default function SocialFeed() {
       notify('⚠️ VITE_GROQ_API_KEY missing — cannot fact-check flagged post');
       return;
     }
-    setGroqPostId(postId);
     setIsGroqChecking(true);
 
     try {
@@ -576,7 +544,6 @@ export default function SocialFeed() {
       if (!res.isMisinformation) {
         markPostGroqChecked(postId, false, res.explanation);
         notify('✅ Groq verified this post as TRUE — no misinformation found.');
-        setGroqPostId(null);
         return;
       }
 
@@ -586,9 +553,6 @@ export default function SocialFeed() {
       if (!author) return;
 
       markPostGroqChecked(postId, true, res.explanation);
-      setSimClaim(content);
-      setSimAuthor(author);
-      setSimExplanation(res.explanation);
 
       const activeAdj = new Map<string, string[]>();
       users.forEach(u => activeAdj.set(u.id, []));
@@ -616,73 +580,47 @@ export default function SocialFeed() {
         return waves;
       };
 
-      setLeftWaves(runBFS(new Set()));
-      setRightWaves(runBFS(protectedSet));
-      setRightProtectedIds(protectedSet);
-      setCurrentStep(0);
-      setIsPlaying(true);
-      setIsSimulating(true);
-      setGroqPostId(null);
-      notify('⚠️ Misinformation confirmed! Containment simulation running…');
-    } catch (err: any) {
+      const lWaves = runBFS(new Set());
+      const rWaves = runBFS(protectedSet);
+      
+      const leftTotal = lWaves.flat().length;
+      const rightTotal = rWaves.flat().length;
+      const reduction = leftTotal > 0 ? ((leftTotal - rightTotal) / leftTotal) * 100 : 0;
+
+      addHistory({
+        strategy: 'Degree Centrality (Flag-triggered Groq)',
+        infectedCount: rightTotal,
+        reduction: `↓ ${reduction.toFixed(1)}%`
+      });
+
+      const flaggedPost = posts.find(p => p.id === postId);
+
+      saveContainmentResult({
+        postId,
+        claim: content,
+        authorName: author.name,
+        explanation: res.explanation,
+        leftTotal,
+        rightTotal,
+        savedPct: reduction,
+        budgetK,
+        sharerIds: flaggedPost ? flaggedPost.sharedBy : [],
+        leftWaves: lWaves,
+        rightWaves: rWaves,
+        protectedIds: Array.from(protectedSet),
+        authorId: author.id
+      });
+
+      notify('⚠️ Misinformation confirmed! Containment simulation logged to Dashboard.');
+    } catch (err: unknown) {
       setIsGroqChecking(false);
-      setGroqPostId(null);
-      notify(`❌ Groq check failed: ${err.message}`);
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      notify(`❌ Groq check failed: ${message}`);
       
       // Fallback: Mark as checked but false so UI doesn't hang indefinitely
-      markPostGroqChecked(postId, false, `[Analysis Failed]: ${err.message}`);
+      markPostGroqChecked(postId, false, `[Analysis Failed]: ${message}`);
     }
   };
-
-  const handlePublishFlagged = () => {
-    if (!simAuthor || !groqPostId) return;
-    const leftTotal = leftWaves.flat().length;
-    const rightTotal = rightWaves.flat().length;
-    const reduction = leftTotal > 0 ? ((leftTotal - rightTotal) / leftTotal) * 100 : 0;
-    
-    addHistory({
-      strategy: 'Degree Centrality (Flag-triggered Groq)',
-      infectedCount: rightTotal,
-      reduction: `↓ ${reduction.toFixed(1)}%`
-    });
-
-    const flaggedPost = posts.find(p => p.id === groqPostId);
-    
-    saveContainmentResult({
-      postId: groqPostId,
-      claim: simClaim,
-      authorName: simAuthor.name,
-      explanation: simExplanation,
-      leftTotal,
-      rightTotal,
-      savedPct: reduction,
-      budgetK,
-      sharerIds: flaggedPost ? flaggedPost.sharedBy : []
-    });
-
-    notify('🛡️ Containment result logged to Dashboard.');
-    resetSim();
-  };
-
-  const resetSim = () => {
-    setIsSimulating(false);
-    setIsPlaying(false);
-    setCurrentStep(0);
-    setSimClaim('');
-    setSimAuthor(null);
-    setSimExplanation('');
-    setGroqPostId(null);
-  };
-
-  const isSimFinished = useMemo(() => {
-    const maxSteps = Math.max(leftWaves.length, rightWaves.length) - 1;
-    return currentStep >= maxSteps;
-  }, [currentStep, leftWaves, rightWaves]);
-
-  const leftTotal = leftWaves.flat().length;
-  const rightTotal = rightWaves.flat().length;
-  const totalSaved = Math.max(0, leftTotal - rightTotal);
-  const savedPct = leftTotal > 0 ? (totalSaved / leftTotal) * 100 : 0;
 
   // Filter and hide blocked user posts, and only show posts visible to current user
   const visiblePosts = currentUser ? getVisiblePosts(currentUser.id) : posts;
@@ -746,195 +684,7 @@ export default function SocialFeed() {
         </div>
       )}
 
-      {/* ── Containment Simulation ── */}
-      {isSimulating && simAuthor && (
-        <div className="bg-surface border border-shieldRed/30 rounded-xl p-6 shadow-xl space-y-6 animate-in fade-in slide-in-from-top-4 duration-300">
-          <div className="flex items-center justify-between border-b border-borderColor pb-4">
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-shieldRed/10 rounded-lg">
-                <ShieldAlert className="w-6 h-6 text-shieldRed animate-pulse" />
-              </div>
-              <div>
-                <h3 className="text-lg font-bold text-textPrimary">⚠️ Misinformation Containment Lab</h3>
-                <p className="text-xs text-textSecondary">Left: uncontrolled · Right: Degree Centrality algorithm (K={budgetK})</p>
-              </div>
-            </div>
-            <button onClick={resetSim} className="p-1.5 hover:bg-background rounded-full text-textSecondary transition-colors">
-              <X className="w-5 h-5" />
-            </button>
-          </div>
 
-          {/* Claim card */}
-          <div className="bg-background border border-shieldRed/20 rounded-lg p-4 space-y-2">
-            <div className="text-xs font-bold text-shieldRed uppercase tracking-wider flex items-center gap-1.5">
-              <ShieldAlert className="w-3.5 h-3.5" /> Flagged &amp; Confirmed by Groq
-            </div>
-            <p className="text-textPrimary font-medium text-sm italic">"{simClaim}"</p>
-            <div className="flex gap-2 text-xs text-textSecondary bg-shieldRed/5 border border-shieldRed/10 rounded p-2.5">
-              <Bot className="w-4 h-4 text-shieldBlue shrink-0 mt-0.5" />
-              <span><strong className="text-textPrimary">Groq Analysis:</strong> {simExplanation}</span>
-            </div>
-          </div>
-
-          {/* Playback controls */}
-          <div className="flex items-center justify-between gap-4 bg-background/50 border border-borderColor rounded-lg px-4 py-2.5">
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setIsPlaying(!isPlaying)}
-                disabled={isSimFinished && !isPlaying}
-                className="p-2 bg-shieldBlue hover:bg-shieldBlue/90 disabled:opacity-50 text-white rounded-md transition-colors"
-              >
-                {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
-              </button>
-              <button
-                onClick={() => { const m = Math.max(leftWaves.length, rightWaves.length) - 1; if (currentStep < m) setCurrentStep(p => p + 1); }}
-                disabled={isPlaying || isSimFinished}
-                className="p-2 bg-surface hover:bg-background border border-borderColor text-textPrimary rounded-md transition-colors disabled:opacity-40"
-              >
-                <SkipForward className="w-4 h-4" />
-              </button>
-              <button
-                onClick={() => { setCurrentStep(0); setIsPlaying(false); }}
-                className="p-2 bg-surface hover:bg-background border border-borderColor text-textPrimary rounded-md transition-colors"
-              >
-                <RotateCcw className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="flex items-center gap-4 text-sm">
-              <span className="text-textSecondary">Step <strong className="text-textPrimary">{currentStep}</strong></span>
-              <span className="h-4 w-px bg-borderColor" />
-              <span className="text-textSecondary">Algorithm: <strong className="text-shieldBlue">Degree Centrality</strong></span>
-            </div>
-          </div>
-
-          {/* Side-by-side grids */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* LEFT */}
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h4 className="font-bold text-sm text-textPrimary flex items-center gap-2">
-                    <span className="w-2.5 h-2.5 rounded-full bg-shieldRed animate-ping" />
-                    No Mitigation
-                  </h4>
-                  <p className="text-xs text-textSecondary">Fake news spreads freely</p>
-                </div>
-                <span className="text-xl font-black text-shieldRed">{leftInfected.size} <span className="text-xs font-normal text-textSecondary">infected</span></span>
-              </div>
-              <div className="h-2 bg-background border border-borderColor rounded-full overflow-hidden">
-                <div className="h-full bg-shieldRed transition-all duration-500" style={{ width: `${(leftInfected.size / Math.max(users.length, 1)) * 100}%` }} />
-              </div>
-              <div className="bg-background border border-borderColor rounded-xl p-3">
-                <div className="grid grid-cols-10 gap-1.5 justify-items-center">
-                  {sortedUsersForGrid.map(u => {
-                    const infected = leftInfected.has(u.id);
-                    const isSource = simAuthor && u.id === simAuthor.id;
-                    return (
-                      <div
-                        key={u.id}
-                        onMouseEnter={() => setHoveredUserLeft(u)}
-                        onMouseLeave={() => setHoveredUserLeft(null)}
-                        className={cn("w-4 h-4 rounded-full border border-black/10 transition-all duration-300 cursor-help hover:scale-125 relative", infected && "scale-110 shadow-[0_0_6px_#E8453C]")}
-                        style={{ backgroundColor: infected ? '#E8453C' : COMMUNITY_COLORS[u.community] ?? '#9CA3AF' }}
-                      >
-                        {isSource && <span className="absolute inset-0 flex items-center justify-center text-[7px] font-black text-white">★</span>}
-                      </div>
-                    );
-                  })}
-                </div>
-                <div className="mt-2 text-[11px] text-textSecondary bg-surface/50 border border-borderColor rounded p-1.5 h-8 flex items-center justify-center text-center overflow-hidden">
-                  {hoveredUserLeft
-                    ? <span className="flex gap-2"><span className="w-2 h-2 rounded-full mt-0.5 shrink-0" style={{ backgroundColor: COMMUNITY_COLORS[hoveredUserLeft.community] }} /><strong>{hoveredUserLeft.name}</strong> · @{hoveredUserLeft.username} · <strong className={leftInfected.has(hoveredUserLeft.id) ? 'text-shieldRed' : 'text-shieldGreen'}>{leftInfected.has(hoveredUserLeft.id) ? 'Infected' : 'Safe'}</strong></span>
-                    : <span className="flex items-center gap-1"><Info className="w-3 h-3" /> Hover a node</span>
-                  }
-                </div>
-              </div>
-            </div>
-
-            {/* RIGHT */}
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h4 className="font-bold text-sm text-textPrimary flex items-center gap-2">
-                    <Shield className="w-4 h-4 text-shieldGreen fill-shieldGreen/20" />
-                    Degree Centrality Shield
-                  </h4>
-                  <p className="text-xs text-textSecondary">Top {budgetK} hubs immunized</p>
-                </div>
-                <span className="text-xl font-black text-shieldGreen">{rightInfected.size} <span className="text-xs font-normal text-textSecondary">infected</span></span>
-              </div>
-              <div className="h-2 bg-background border border-borderColor rounded-full overflow-hidden">
-                <div className="h-full bg-shieldGreen transition-all duration-500" style={{ width: `${(rightInfected.size / Math.max(users.length, 1)) * 100}%` }} />
-              </div>
-              <div className="bg-background border border-borderColor rounded-xl p-3">
-                <div className="grid grid-cols-10 gap-1.5 justify-items-center">
-                  {sortedUsersForGrid.map(u => {
-                    const infected = rightInfected.has(u.id);
-                    const protected_ = rightProtectedIds.has(u.id);
-                    const isSource = simAuthor && u.id === simAuthor.id;
-                    return (
-                      <div
-                        key={u.id}
-                        onMouseEnter={() => setHoveredUserRight(u)}
-                        onMouseLeave={() => setHoveredUserRight(null)}
-                        className={cn("w-4 h-4 rounded-full border border-black/10 transition-all duration-300 cursor-help hover:scale-125 relative", infected && "scale-110 shadow-[0_0_6px_#E8453C]", protected_ && !infected && "ring-1 ring-shieldGreen/60 scale-105")}
-                        style={{ backgroundColor: infected ? '#E8453C' : protected_ ? '#2ECC71' : COMMUNITY_COLORS[u.community] ?? '#9CA3AF' }}
-                      >
-                        {isSource && <span className="absolute inset-0 flex items-center justify-center text-[7px] font-black text-white">★</span>}
-                        {protected_ && !infected && <span className="absolute inset-0 flex items-center justify-center text-[8px]">🛡</span>}
-                      </div>
-                    );
-                  })}
-                </div>
-                <div className="mt-2 text-[11px] text-textSecondary bg-surface/50 border border-borderColor rounded p-1.5 h-8 flex items-center justify-center text-center overflow-hidden">
-                  {hoveredUserRight
-                    ? <span className="flex gap-2"><span className="w-2 h-2 rounded-full mt-0.5 shrink-0" style={{ backgroundColor: COMMUNITY_COLORS[hoveredUserRight.community] }} /><strong>{hoveredUserRight.name}</strong> · <strong className={rightProtectedIds.has(hoveredUserRight.id) ? 'text-shieldGreen' : rightInfected.has(hoveredUserRight.id) ? 'text-shieldRed' : 'text-textSecondary'}>{rightProtectedIds.has(hoveredUserRight.id) ? '🛡 Shielded' : rightInfected.has(hoveredUserRight.id) ? 'Infected' : 'Safe'}</strong></span>
-                    : <span className="flex items-center gap-1"><Info className="w-3 h-3" /> Hover a node</span>
-                  }
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Results */}
-          {isSimFinished && (
-            <div className="bg-shieldGreen/5 border border-shieldGreen/20 rounded-xl p-5 space-y-4 animate-in zoom-in-95 duration-500">
-              <div className="flex items-center gap-2">
-                <CheckCircle2 className="w-5 h-5 text-shieldGreen" />
-                <h4 className="font-bold text-textPrimary">Containment Analysis Complete</h4>
-              </div>
-              <div className="grid grid-cols-3 gap-4 text-center">
-                <div className="bg-surface border border-borderColor rounded-lg p-3">
-                  <p className="text-xs text-textSecondary mb-1">Without Algorithm</p>
-                  <p className="text-2xl font-black text-shieldRed">{leftTotal}</p>
-                </div>
-                <div className="bg-surface border border-borderColor rounded-lg p-3">
-                  <p className="text-xs text-textSecondary mb-1">With Algorithm</p>
-                  <p className="text-2xl font-black text-shieldGreen">{rightTotal}</p>
-                </div>
-                <div className="bg-surface border border-borderColor rounded-lg p-3">
-                  <p className="text-xs text-textSecondary mb-1">Nodes Saved</p>
-                  <p className="text-2xl font-black text-shieldBlue">{savedPct.toFixed(0)}%</p>
-                </div>
-              </div>
-              <p className="text-sm text-textSecondary">
-                By immunizing the top <strong>{budgetK}</strong> most-connected accounts, the algorithm blocked <strong>{totalSaved}</strong> additional users from receiving this misinformation.
-              </p>
-              <div className="flex gap-3 justify-end pt-1">
-                <button onClick={resetSim} className="px-4 py-2 border border-borderColor hover:bg-background rounded-lg text-sm font-medium text-textPrimary transition-colors">
-                  Close
-                </button>
-                <button
-                  onClick={handlePublishFlagged}
-                  className="px-5 py-2 bg-shieldGreen hover:bg-shieldGreen/90 text-white rounded-lg text-sm font-semibold transition-all shadow-[0_0_15px_rgba(46,204,113,0.3)] flex items-center gap-2"
-                >
-                  <CheckCircle2 className="w-4 h-4" /> Log to Analytics
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
 
       {/* ── Post Composer ── */}
       {currentUser ? (

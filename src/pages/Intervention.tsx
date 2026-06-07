@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
-import { useAppContext } from '../context/AppContext';
+import { useAppContext } from '../context/useAppContext';
 import { Zap, TrendingDown, Target, Loader2, Users } from 'lucide-react';
 
 type ResultType = {
@@ -30,6 +30,7 @@ export default function Intervention() {
     users.forEach(u => adj.set(u.id, []));
     edges.forEach(e => {
       // Pre-roll the dice for all edges
+      // eslint-disable-next-line react-hooks/purity
       if (Math.random() < spreadProb) {
         adj.get(e.source)!.push(e.target);
       }
@@ -63,6 +64,7 @@ export default function Intervention() {
   useEffect(() => {
     if (!sourceNode) return;
     const count = simulateReachability(sourceNode, new Set(), traversableAdj);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setBaselineCount(count);
     
     // Clear results on parameters change

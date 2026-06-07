@@ -1,7 +1,8 @@
 import { useState, useMemo, useRef, useCallback } from 'react';
 import CytoscapeComponent from 'react-cytoscapejs';
 import cytoscape from 'cytoscape';
-import { useAppContext, type User } from '../context/AppContext';
+import { type User } from '../context/AppContext';
+import { useAppContext } from '../context/useAppContext';
 import { ZoomIn, ZoomOut, Maximize, Settings2, ShieldCheck, Bug, Network } from 'lucide-react';
 import { cn } from '../lib/utils';
 
@@ -246,7 +247,7 @@ export default function NetworkGraph() {
           <label className="text-xs text-gray-400 mb-1.5 block">Layout Algorithm</label>
           <select 
             value={layoutName} 
-            onChange={(e) => setLayoutName(e.target.value as any)}
+            onChange={(e) => setLayoutName(e.target.value as 'cose' | 'grid' | 'circle' | 'concentric')}
             className="w-full bg-background border border-white/10 rounded-md text-sm text-white px-3 py-2 outline-none focus:border-shieldBlue"
           >
             <option value="cose">Force-directed (CoSE)</option>

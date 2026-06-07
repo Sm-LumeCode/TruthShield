@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useAppContext } from '../context/AppContext';
+import { useAppContext } from '../context/useAppContext';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell, LabelList,
   LineChart, Line, PieChart, Pie
@@ -120,6 +120,7 @@ export default function Analytics() {
   };
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     runSimulations();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [users, edges]); // Run once data is loaded

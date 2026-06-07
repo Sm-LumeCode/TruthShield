@@ -9,7 +9,7 @@ import SpreadSim from './pages/SpreadSim';
 import Intervention from './pages/Intervention';
 import Analytics from './pages/Analytics';
 import { cn } from './lib/utils';
-import { useAppContext } from './context/AppContext';
+import { useAppContext } from './context/useAppContext';
 
 const navItems = [
   { path: '/', label: 'Dashboard', icon: LayoutDashboard },
