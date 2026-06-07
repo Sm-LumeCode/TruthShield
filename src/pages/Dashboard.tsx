@@ -3,7 +3,7 @@ import { Users, Link as LinkIcon, Component, Bug, Play, Activity, ShieldAlert, C
 import { Link } from 'react-router-dom';
 
 export default function Dashboard() {
-  const { users, edges, history } = useAppContext();
+  const { users, edges, history, containmentResults } = useAppContext();
 
   // Compute live stats
   const totalUsers = users.length;
@@ -42,6 +42,44 @@ export default function Dashboard() {
           </div>
         ))}
       </div>
+
+      {/* Latest Containment Result */}
+      {containmentResults.length > 0 && (
+        <div className="bg-surface border border-shieldGreen/40 rounded-xl p-6 shadow-sm relative overflow-hidden">
+          <div className="absolute top-0 left-0 w-1.5 h-full bg-shieldGreen" />
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-2 bg-shieldGreen/10 rounded-lg">
+              <ShieldAlert className="w-5 h-5 text-shieldGreen" />
+            </div>
+            <div>
+              <h3 className="text-lg font-bold text-textPrimary">Recent Misinformation Contained</h3>
+              <p className="text-xs text-textSecondary">{containmentResults[0].timestamp.toLocaleString()}</p>
+            </div>
+          </div>
+          
+          <div className="bg-background border border-borderColor rounded-lg p-4 space-y-3 mb-5">
+            <p className="text-sm italic font-medium">"{containmentResults[0].claim}"</p>
+            <div className="text-xs text-textSecondary bg-shieldGreen/5 border border-shieldGreen/10 p-2.5 rounded">
+              <strong className="text-textPrimary">Groq AI:</strong> {containmentResults[0].explanation}
+            </div>
+          </div>
+          
+          <div className="grid grid-cols-3 gap-4 text-center">
+            <div className="bg-background border border-borderColor rounded-lg p-3">
+              <p className="text-xs text-textSecondary mb-1">Spread Prevented</p>
+              <p className="text-2xl font-black text-shieldGreen">{containmentResults[0].savedPct.toFixed(0)}%</p>
+            </div>
+            <div className="bg-background border border-borderColor rounded-lg p-3">
+              <p className="text-xs text-textSecondary mb-1">Users Protected</p>
+              <p className="text-2xl font-black text-shieldBlue">{containmentResults[0].leftTotal - containmentResults[0].rightTotal}</p>
+            </div>
+            <div className="bg-background border border-borderColor rounded-lg p-3">
+              <p className="text-xs text-textSecondary mb-1">Warnings Sent</p>
+              <p className="text-2xl font-black text-shieldOrange">{containmentResults[0].sharerIds.length}</p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Quick Start */}
       <div className="bg-surface rounded-xl p-6 border border-borderColor shadow-sm">

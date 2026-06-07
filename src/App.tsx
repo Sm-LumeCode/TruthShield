@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Routes, Route, NavLink, useLocation, useNavigate } from 'react-router-dom';
-import { Shield, LayoutDashboard, Rss, Network, Activity, ShieldAlert, BarChart3, CheckCircle2, Sun, Moon, Info, X, Users, Target } from 'lucide-react';
+import { Shield, LayoutDashboard, Rss, Network, Activity, ShieldAlert, BarChart3, CheckCircle2, Sun, Moon, Info, X, Users, Target, UserCircle2 } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import Dashboard from './pages/Dashboard';
 import SocialFeed from './pages/SocialFeed';
@@ -20,8 +20,12 @@ const navItems = [
   { path: '/analytics', label: 'Analytics', icon: BarChart3 },
 ];
 
+const COMMUNITY_COLORS_APP: Record<number, string> = {
+  1: '#E8453C', 2: '#4A90D9', 3: '#2ECC71', 4: '#F5A623', 5: '#9B59B6',
+};
+
 function App() {
-  const { theme, toggleTheme, notification } = useAppContext();
+  const { theme, toggleTheme, notification, currentUser } = useAppContext();
   const location = useLocation();
   const navigate = useNavigate();
   const [showHowItWorks, setShowHowItWorks] = useState(false);
@@ -77,9 +81,19 @@ function App() {
           >
             {theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
           </button>
-          <div className="h-8 w-8 rounded-full bg-background flex items-center justify-center border border-borderColor ml-2">
-            <span className="text-xs font-medium">AD</span>
-          </div>
+          {currentUser ? (
+            <div
+              className="h-8 w-8 rounded-full flex items-center justify-center border-2 border-shieldBlue/40 ml-2 text-xs font-bold text-white"
+              style={{ backgroundColor: COMMUNITY_COLORS_APP[parseInt(currentUser.id.replace('u','')) % 5 + 1] ?? '#4A90D9' }}
+              title={`Logged in as ${currentUser.name} (@${currentUser.username})`}
+            >
+              {currentUser.avatar.length > 2 ? currentUser.avatar.slice(0,2) : currentUser.avatar}
+            </div>
+          ) : (
+            <div className="h-8 w-8 rounded-full bg-background flex items-center justify-center border border-borderColor ml-2" title="Not logged in">
+              <UserCircle2 className="w-5 h-5 text-textSecondary" />
+            </div>
+          )}
         </div>
       </header>
 
