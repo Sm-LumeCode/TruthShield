@@ -17,7 +17,7 @@ function SimulationCard({ result, users, edges }: { result: ContainmentResult, u
   const [hoveredUserRight, setHoveredUserRight] = useState<User | null>(null);
   const [hoveredUserGreedy, setHoveredUserGreedy] = useState<User | null>(null);
 
-  const { leftWaves, rightWaves, protectedIds, authorId, budgetK, claim, explanation } = result;
+  const { leftWaves, rightWaves, protectedIds, authorId, budgetK, claim, explanation, isAutomated } = result;
   
   const layout = useMemo(() => {
     const width = 400;
@@ -79,8 +79,6 @@ function SimulationCard({ result, users, edges }: { result: ContainmentResult, u
 
   const leftTotal = leftWaves.flat().length;
   const rightTotal = rightWaves.flat().length;
-  const totalSaved = Math.max(0, leftTotal - rightTotal);
-  const savedPct = leftTotal > 0 ? (totalSaved / leftTotal) * 100 : 0;
 
   return (
     <div className="bg-surface border border-shieldRed/30 rounded-xl p-6 shadow-sm space-y-6 animate-in fade-in slide-in-from-top-4 duration-300">
@@ -90,7 +88,9 @@ function SimulationCard({ result, users, edges }: { result: ContainmentResult, u
             <ShieldAlert className="w-6 h-6 text-shieldRed animate-pulse" />
           </div>
           <div>
-            <h3 className="text-lg font-bold text-textPrimary">⚠️ Misinformation Containment Lab</h3>
+            <h3 className="text-lg font-bold text-textPrimary">
+              {isAutomated ? "🤖 Automated Misinformation Spreading" : "⚠️ Misinformation Containment Lab"}
+            </h3>
             <p className="text-xs text-textSecondary">{result.timestamp.toLocaleString()} · No Mitigation vs Degree Centrality vs Greedy (K={budgetK})</p>
           </div>
         </div>
@@ -145,52 +145,54 @@ function SimulationCard({ result, users, edges }: { result: ContainmentResult, u
           </div>
 
           {/* Side-by-side grids */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className={`grid grid-cols-1 ${isAutomated ? 'md:grid-cols-3' : 'md:grid-cols-2'} gap-4`}>
             {/* LEFT — No Mitigation */}
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h4 className="font-bold text-sm text-textPrimary flex items-center gap-2">
-                    <span className="w-2.5 h-2.5 rounded-full bg-shieldRed animate-ping" />
-                    No Mitigation
-                  </h4>
-                  <p className="text-xs text-textSecondary">Fake news spreads freely</p>
+            {isAutomated && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="font-bold text-sm text-textPrimary flex items-center gap-2">
+                      <span className="w-2.5 h-2.5 rounded-full bg-shieldRed animate-ping" />
+                      No Mitigation
+                    </h4>
+                    <p className="text-xs text-textSecondary">Fake news spreads freely</p>
+                  </div>
+                  <span className="text-xl font-black text-shieldRed">{leftInfected.size} <span className="text-xs font-normal text-textSecondary">infected</span></span>
                 </div>
-                <span className="text-xl font-black text-shieldRed">{leftInfected.size} <span className="text-xs font-normal text-textSecondary">infected</span></span>
-              </div>
-              <div className="h-2 bg-background border border-borderColor rounded-full overflow-hidden">
-                <div className="h-full bg-shieldRed transition-all duration-500" style={{ width: `${(leftInfected.size / Math.max(users.length, 1)) * 100}%` }} />
-              </div>
-              <div className="bg-background border border-borderColor rounded-xl p-3">
-                <svg viewBox="0 0 400 300" className="w-full h-[240px] bg-background">
-                  {layout.links.map((link, i) => {
-                    const sInfected = leftInfected.has(link.source);
-                    const tInfected = leftInfected.has(link.target);
-                    const isActive = sInfected && tInfected;
-                    return (
-                      <line key={i} x1={link.sourceX} y1={link.sourceY} x2={link.targetX} y2={link.targetY} stroke={isActive ? '#E8453C' : '#333'} strokeWidth={isActive ? 2 : 1} opacity={isActive ? 1 : 0.3} />
-                    );
-                  })}
-                  {layout.nodes.map(node => {
-                    const infected = leftInfected.has(node.id);
-                    const isSource = node.id === authorId;
-                    return (
-                      <circle key={node.id} cx={node.x} cy={node.y} r={isSource ? 8 : 6} fill={infected ? '#E8453C' : (COMMUNITY_COLORS[node.user.community] ?? '#9CA3AF')} stroke="#111" strokeWidth={1}
-                        onMouseEnter={() => setHoveredUserLeft(node.user)}
-                        onMouseLeave={() => setHoveredUserLeft(null)}
-                        className={cn("transition-all duration-300 cursor-pointer", infected && "drop-shadow-[0_0_6px_#E8453C]")}
-                      />
-                    );
-                  })}
-                </svg>
-                <div className="mt-2 text-[11px] text-textSecondary bg-surface/50 border border-borderColor rounded p-1.5 h-7 flex items-center justify-center text-center overflow-hidden">
-                  {hoveredUserLeft
-                    ? <span className="flex gap-2"><span className="w-2 h-2 rounded-full mt-0.5 shrink-0" style={{ backgroundColor: COMMUNITY_COLORS[hoveredUserLeft.community] }} /><strong>{hoveredUserLeft.name}</strong> · <strong className={leftInfected.has(hoveredUserLeft.id) ? 'text-shieldRed' : 'text-shieldGreen'}>{leftInfected.has(hoveredUserLeft.id) ? 'Infected' : 'Safe'}</strong></span>
-                    : <span className="flex items-center gap-1"><Info className="w-3 h-3" /> Hover a node</span>
-                  }
+                <div className="h-2 bg-background border border-borderColor rounded-full overflow-hidden">
+                  <div className="h-full bg-shieldRed transition-all duration-500" style={{ width: `${(leftInfected.size / Math.max(users.length, 1)) * 100}%` }} />
+                </div>
+                <div className="bg-background border border-borderColor rounded-xl p-3">
+                  <svg viewBox="0 0 400 300" className="w-full h-[240px] bg-background">
+                    {layout.links.map((link, i) => {
+                      const sInfected = leftInfected.has(link.source);
+                      const tInfected = leftInfected.has(link.target);
+                      const isActive = sInfected && tInfected;
+                      return (
+                        <line key={i} x1={link.sourceX} y1={link.sourceY} x2={link.targetX} y2={link.targetY} stroke={isActive ? '#E8453C' : '#333'} strokeWidth={isActive ? 2 : 1} opacity={isActive ? 1 : 0.3} />
+                      );
+                    })}
+                    {layout.nodes.map(node => {
+                      const infected = leftInfected.has(node.id);
+                      const isSource = node.id === authorId;
+                      return (
+                        <circle key={node.id} cx={node.x} cy={node.y} r={isSource ? 8 : 6} fill={infected ? '#E8453C' : (COMMUNITY_COLORS[node.user.community] ?? '#9CA3AF')} stroke="#111" strokeWidth={1}
+                          onMouseEnter={() => setHoveredUserLeft(node.user)}
+                          onMouseLeave={() => setHoveredUserLeft(null)}
+                          className={cn("transition-all duration-300 cursor-pointer", infected && "drop-shadow-[0_0_6px_#E8453C]")}
+                        />
+                      );
+                    })}
+                  </svg>
+                  <div className="mt-2 text-[11px] text-textSecondary bg-surface/50 border border-borderColor rounded p-1.5 h-7 flex items-center justify-center text-center overflow-hidden">
+                    {hoveredUserLeft
+                      ? <span className="flex gap-2"><span className="w-2 h-2 rounded-full mt-0.5 shrink-0" style={{ backgroundColor: COMMUNITY_COLORS[hoveredUserLeft.community] }} /><strong>{hoveredUserLeft.name}</strong> · <strong className={leftInfected.has(hoveredUserLeft.id) ? 'text-shieldRed' : 'text-shieldGreen'}>{leftInfected.has(hoveredUserLeft.id) ? 'Infected' : 'Safe'}</strong></span>
+                      : <span className="flex items-center gap-1"><Info className="w-3 h-3" /> Hover a node</span>
+                    }
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
 
             {/* MIDDLE — Degree Centrality */}
             <div className="space-y-3">

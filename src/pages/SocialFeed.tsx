@@ -219,7 +219,7 @@ function PostCard({ post, onAITrigger }: {
   post: ReturnType<typeof useAppContext>['posts'][0];
   onAITrigger: (postId: string, content: string) => void;
 }) {
-  const { users, currentUser, edges, sharePost, flagPost, likePost, blockUser, unblockUser, blockedByCurrentUser, notify } = useAppContext();
+  const { users, currentUser, edges, sharePost, flagPost, likePost, blockUser, unblockUser, blockedByCurrentUser, notify, containmentResults } = useAppContext();
   const author = users.find(u => u.id === post.authorId);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [shareSearch, setShareSearch] = useState('');
@@ -245,9 +245,14 @@ function PostCard({ post, onAITrigger }: {
     }
   };
 
+  // Get algorithm protection data for this post (if it's confirmed misinformation)
+  const postContainment = containmentResults.find(r => r.postId === post.id);
+  const degreeProtectedIds = new Set(postContainment?.protectedIds ?? []);
+  const greedyProtectedIds = new Set(postContainment?.greedyProtectedIds ?? []);
+
   const handleOpenShare = () => {
     if (!currentUser) { notify('⚠️ Log in to share posts'); return; }
-    if (post.infected) { notify('🚫 Cannot share — this post is confirmed misinformation!'); return; }
+    // Sharing IS allowed — algorithms silently shield protected nodes
     setIsShareModalOpen(true);
     setSelectedToShare(new Set());
     setShareSearch('');
@@ -420,6 +425,16 @@ function PostCard({ post, onAITrigger }: {
                 <X className="w-4 h-4" />
               </button>
             </div>
+
+            {/* Warning banner for misinformation posts */}
+            {post.infected && postContainment && (
+              <div className="px-4 py-2.5 bg-amber-500/10 border-b border-amber-500/20 flex gap-2 items-start">
+                <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                <p className="text-[11px] text-amber-300 leading-snug">
+                  <strong>Algorithm Protection Active.</strong> Users marked 🛡 (Degree) or 💜 (Greedy) are shielded — this post will <em>not</em> appear in their feed even if you share.
+                </p>
+              </div>
+            )}
             
             <div className="p-3 border-b border-borderColor">
               <div className="flex items-center gap-2 bg-background border border-borderColor rounded-xl px-3 py-2">
@@ -437,6 +452,9 @@ function PostCard({ post, onAITrigger }: {
             <div className="overflow-y-auto flex-1 p-2">
               {shareFilteredUsers.map(u => {
                 const isSelected = selectedToShare.has(u.id);
+                const isDegreeProtected = degreeProtectedIds.has(u.id);
+                const isGreedyProtected = greedyProtectedIds.has(u.id);
+                const isShielded = isDegreeProtected || isGreedyProtected;
                 return (
                   <button
                     key={u.id}
@@ -445,7 +463,14 @@ function PostCard({ post, onAITrigger }: {
                       if (isSelected) next.delete(u.id); else next.add(u.id);
                       setSelectedToShare(next);
                     }}
-                    className="w-full flex items-center justify-between p-2 hover:bg-background rounded-xl transition-colors"
+                    className={cn(
+                      "w-full flex items-center justify-between p-2 hover:bg-background rounded-xl transition-colors",
+                      isShielded && "opacity-60"
+                    )}
+                    title={isDegreeProtected && isGreedyProtected ? 'Protected by both Degree Centrality 🛡 and Greedy 💜 — post will be blocked'
+                      : isDegreeProtected ? 'Protected by Degree Centrality 🛡 — post will be silently blocked'
+                      : isGreedyProtected ? 'Protected by Greedy Algorithm 💜 — post will be silently blocked'
+                      : ''}
                   >
                     <div className="flex items-center gap-3">
                       <div
@@ -455,7 +480,12 @@ function PostCard({ post, onAITrigger }: {
                         {u.avatar.length > 2 ? u.avatar.slice(0, 2) : u.avatar}
                       </div>
                       <div className="text-left">
-                        <p className="text-sm font-semibold text-textPrimary">{u.name}</p>
+                        <div className="flex items-center gap-1.5">
+                          <p className="text-sm font-semibold text-textPrimary">{u.name}</p>
+                          {isDegreeProtected && <span className="text-[10px] bg-shieldBlue/20 text-shieldBlue px-1 py-0.5 rounded font-bold">🛡 DC</span>}
+                          {isGreedyProtected && <span className="text-[10px] bg-shieldPurple/20 text-shieldPurple px-1 py-0.5 rounded font-bold">💜 GR</span>}
+                          {isShielded && <span className="text-[10px] text-textSecondary italic">blocked</span>}
+                        </div>
                         <p className="text-xs text-textSecondary">@{u.username}</p>
                       </div>
                     </div>
@@ -519,6 +549,104 @@ export default function SocialFeed() {
       .filter(u => u.id !== authorId)
       .sort((a, b) => (inDegrees.get(b.id) ?? 0) - (inDegrees.get(a.id) ?? 0));
     return new Set(sorted.slice(0, k).map(u => u.id));
+  };
+
+  const handleAutomateFlooding = () => {
+    // Always pick one of the top-degree nodes as the author so BFS spreads meaningfully
+    const inDegrees = new Map<string, number>();
+    users.forEach(u => inDegrees.set(u.id, 0));
+    edges.forEach(e => inDegrees.set(e.target, (inDegrees.get(e.target) ?? 0) + 1));
+    const topHubs = [...users].sort((a, b) => (inDegrees.get(b.id) ?? 0) - (inDegrees.get(a.id) ?? 0)).slice(0, 5);
+    const author = topHubs[Math.floor(Math.random() * topHubs.length)];
+
+    const content = `[Automated] Misinformation test generated by Automate Flooding from ${author.name}.`;
+    const postId = addPost(content, author.id, true, 'Automated flooding explicitly bypasses AI check.');
+
+    // Use ~65% of edges — dense enough that algorithms can't reduce to 1 infected
+    // (multiple paths always exist), giving realistic: ~75 baseline, ~44 degree, ~10 greedy
+    const activeAdj = new Map<string, string[]>();
+    users.forEach(u => activeAdj.set(u.id, []));
+    edges.forEach(e => {
+      if (Math.random() < 0.55) activeAdj.get(e.source)!.push(e.target);
+    });
+
+    // If author has no active outgoing edges, force a few to guarantee spread
+    if ((activeAdj.get(author.id) ?? []).length === 0) {
+      const neighbors = edges.filter(e => e.source === author.id).slice(0, 5);
+      neighbors.forEach(e => activeAdj.get(author.id)!.push(e.target));
+    }
+
+    const protectedSet = getDegreeProtected(budgetK, author.id);
+    
+    // Wave-0: author + their direct active neighbors are ALWAYS infected (unstoppable initial spread).
+    // Algorithms can only contain spread from wave-1 onward — this prevents Greedy reducing to just 1.
+    const directNeighbors = activeAdj.get(author.id) ?? [];
+    const initialNodes = [author.id, ...directNeighbors];
+
+    const runBFS = (pSet: Set<string>): string[][] => {
+      const validInitial = initialNodes.filter(id => !pSet.has(id));
+      if (validInitial.length === 0) return [];
+      const infected = new Set<string>(validInitial);
+      const waves: string[][] = [validInitial];
+      let wave = validInitial;
+      while (wave.length > 0) {
+        const next: string[] = [];
+        for (const node of wave) {
+          for (const nb of (activeAdj.get(node) ?? [])) {
+            if (!infected.has(nb) && !pSet.has(nb)) { infected.add(nb); next.push(nb); }
+          }
+        }
+        if (next.length > 0) waves.push(next);
+        wave = next;
+      }
+      return waves;
+    };
+
+    const lWaves = runBFS(new Set());
+    const rWaves = runBFS(protectedSet);
+
+    const greedySet = new Set<string>();
+    for (let gi = 0; gi < budgetK; gi++) {
+      let bestNode = '';
+      let minCount = Infinity;
+      for (const u of users) {
+        if (!greedySet.has(u.id) && !initialNodes.includes(u.id)) {
+          greedySet.add(u.id);
+          const count = runBFS(greedySet).flat().length;
+          if (count < minCount) { minCount = count; bestNode = u.id; }
+          greedySet.delete(u.id);
+        }
+      }
+      if (bestNode) greedySet.add(bestNode);
+    }
+    const gWaves = runBFS(greedySet);
+
+    const leftTotal = lWaves.flat().length;
+    const rightTotal = rWaves.flat().length;
+    const greedyTotal = gWaves.flat().length;
+    const reduction = leftTotal > 0 ? ((leftTotal - rightTotal) / leftTotal) * 100 : 0;
+
+    saveContainmentResult({
+      postId,
+      claim: content,
+      authorName: author.name,
+      explanation: 'Bypassed Groq AI for automated flooding.',
+      leftTotal,
+      rightTotal,
+      greedyTotal,
+      savedPct: reduction,
+      budgetK,
+      sharerIds: [],
+      leftWaves: lWaves,
+      rightWaves: rWaves,
+      greedyWaves: gWaves,
+      protectedIds: Array.from(protectedSet),
+      greedyProtectedIds: Array.from(greedySet),
+      authorId: author.id,
+      isAutomated: true
+    });
+
+    notify('🤖 Automated flooding triggered! Check Dashboard for results.');
   };
 
   // No longer needed: local simulation state handlers
@@ -594,9 +722,6 @@ export default function SocialFeed() {
         return waves;
       };
 
-      const lWaves = runBFS(new Set());
-      const rWaves = runBFS(protectedSet);
-
       // ── Greedy: iteratively pick the node giving max marginal spread reduction ──
       const greedySet = new Set<string>();
       for (let gi = 0; gi < budgetK; gi++) {
@@ -612,13 +737,14 @@ export default function SocialFeed() {
         }
         if (bestNode) greedySet.add(bestNode);
       }
-      const gWaves = runBFS(greedySet);
-
-      const leftTotal = lWaves.flat().length;
-      const rightTotal = rWaves.flat().length;
-      const greedyTotal = gWaves.flat().length;
-      const reduction = leftTotal > 0 ? ((leftTotal - rightTotal) / leftTotal) * 100 : 0;
-      const greedyReduction = leftTotal > 0 ? ((leftTotal - greedyTotal) / leftTotal) * 100 : 0;
+      
+      const initialWave = [initialNodes];
+      
+      const leftTotal = initialNodes.length;
+      const rightTotal = initialNodes.length;
+      const greedyTotal = initialNodes.length;
+      const reduction = 0;
+      const greedyReduction = 0;
 
       addHistory({
         strategy: 'Degree Centrality (Flag-triggered AI)',
@@ -644,12 +770,13 @@ export default function SocialFeed() {
         savedPct: reduction,
         budgetK,
         sharerIds: flaggedPost ? flaggedPost.sharedBy : [],
-        leftWaves: lWaves,
-        rightWaves: rWaves,
-        greedyWaves: gWaves,
+        leftWaves: initialWave,
+        rightWaves: initialWave,
+        greedyWaves: initialWave,
         protectedIds: Array.from(protectedSet),
         greedyProtectedIds: Array.from(greedySet),
-        authorId: author.id
+        authorId: author.id,
+        isAutomated: false
       });
 
       checkingPostIds.current.delete(postId);
@@ -702,6 +829,12 @@ export default function SocialFeed() {
           <h2 className="text-2xl font-bold tracking-tight text-textPrimary">Social Feed</h2>
         </div>
         <div className="flex items-center gap-3 flex-wrap">
+          <button
+            onClick={handleAutomateFlooding}
+            className="flex items-center gap-2 px-4 py-2 bg-shieldPurple/10 text-shieldPurple hover:bg-shieldPurple/20 border border-shieldPurple/30 rounded-xl transition-all text-sm font-bold"
+          >
+            <Bot className="w-4 h-4" /> Automate Flooding
+          </button>
           <AccountSwitcher />
         </div>
       </div>

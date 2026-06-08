@@ -14,10 +14,18 @@ const communityColors = {
   5: '#9B59B6', 
 };
 
+const getManualShareEdges = (post: Post) => {
+  if (post.shareEdges?.length) return post.shareEdges;
+  const fallbackSources = post.sharedBy.length ? post.sharedBy : [post.authorId];
+  return fallbackSources.flatMap(source =>
+    post.sharedTo.map(targetId => ({ source, target: targetId }))
+  );
+};
+
 export default function NetworkGraph() {
-  const { users, edges, currentUser, posts } = useAppContext();
+  const { users, edges, currentUser, posts, containmentResults } = useAppContext();
   const [layoutName, setLayoutName] = useState<'cose' | 'grid'>('cose');
-  const [showLabels, setShowLabels] = useState(false);
+  const [showLabels, setShowLabels] = useState(true);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   
   const [criticalUsers, setCriticalUsers] = useState<{id: string, name: string, degree: number}[] | null>(null);
@@ -27,20 +35,71 @@ export default function NetworkGraph() {
 
   // Convert context data to Cytoscape elements (Filtered)
   const elements = useMemo(() => {
-    let filteredUsers = users;
-    let filteredEdges = edges;
+    let filteredUsers: User[] = [];
+    let filteredEdges: { source: string; target: string }[] = [];
 
-    if (currentUser) {
-      filteredEdges = edges.filter(e => e.source === currentUser.id || e.target === currentUser.id);
+    const activePost = expandedPost ? posts.find(p => p.id === expandedPost) : null;
+    const activeResult = activePost ? containmentResults.find(r => r.postId === activePost.id) : null;
+
+    if (activePost) {
+      // If a post is selected, show only the actual manual share trail for this post.
       const involvedIds = new Set<string>();
-      filteredEdges.forEach(e => { involvedIds.add(e.source); involvedIds.add(e.target); });
+      const manualEdges = getManualShareEdges(activePost);
+      const relevantEdges = currentUser
+        ? manualEdges.filter(e => e.source === currentUser.id || e.target === currentUser.id || activePost.authorId === currentUser.id)
+        : manualEdges;
+
+      involvedIds.add(activePost.authorId);
+      relevantEdges.forEach(e => {
+        involvedIds.add(e.source);
+        involvedIds.add(e.target);
+      });
+
+      filteredUsers = users.filter(u => involvedIds.has(u.id));
+      filteredEdges = relevantEdges.filter(e => involvedIds.has(e.source) && involvedIds.has(e.target));
+    } else if (currentUser) {
+      const involvedIds = new Set<string>();
+      filteredEdges = posts.flatMap(post => getManualShareEdges(post))
+        .filter(e => e.source === currentUser.id);
+      filteredEdges.forEach(e => {
+        involvedIds.add(e.source);
+        involvedIds.add(e.target);
+      });
       involvedIds.add(currentUser.id);
+      filteredUsers = users.filter(u => involvedIds.has(u.id));
+    } else {
+      filteredEdges = posts.flatMap(post => getManualShareEdges(post));
+      const involvedIds = new Set<string>();
+      filteredEdges.forEach(e => {
+        involvedIds.add(e.source);
+        involvedIds.add(e.target);
+      });
       filteredUsers = users.filter(u => involvedIds.has(u.id));
     }
 
     const cyNodes = filteredUsers.map(user => {
-      const size = 15 + Math.min(user.followers * 2, 40); 
+      const size = user.id === currentUser?.id ? 52 : 46;
       
+      let isInfected = false;
+      let isProtected = false;
+
+      if (activeResult) {
+        // Use Greedy results if available, otherwise Degree Centrality
+        if (activeResult.greedyWaves) {
+          isInfected = activeResult.greedyWaves.some(w => w.includes(user.id));
+          isProtected = activeResult.greedyProtectedIds?.includes(user.id) ?? false;
+        } else {
+          isInfected = activeResult.rightWaves.some(w => w.includes(user.id));
+          isProtected = activeResult.protectedIds?.includes(user.id) ?? false;
+        }
+      } else if (activePost) {
+        isInfected = activePost.infected && (
+          activePost.sharedBy.includes(user.id) ||
+          activePost.sharedTo.includes(user.id) ||
+          activePost.authorId === user.id
+        );
+      }
+
       return {
         data: { 
           id: user.id, 
@@ -48,10 +107,11 @@ export default function NetworkGraph() {
           community: user.community,
           followers: user.followers,
           size,
-          color: user.id === currentUser?.id ? '#4A90D9' : (communityColors[user.community as keyof typeof communityColors] || '#ccc'),
-          isInfected: user.isInfected,
-          isProtected: user.isProtected,
-          rawUser: user
+          color: '#7B8794',
+          isInfected,
+          isProtected,
+          isCurrentUser: user.id === currentUser?.id,
+          rawUser: { ...user, isInfected, isProtected }
         }
       };
     });
@@ -65,7 +125,7 @@ export default function NetworkGraph() {
     }));
 
     return [...cyNodes, ...cyEdges];
-  }, [users, edges, currentUser]);
+  }, [users, edges, currentUser, expandedPost, posts, containmentResults]);
 
   // Cy stylesheet
   const stylesheet = useMemo<cytoscape.StylesheetStyle[]>(() => [
@@ -77,12 +137,13 @@ export default function NetworkGraph() {
         'background-color': 'data(color)',
         'label': showLabels ? 'data(label)' : '',
         'color': '#fff',
-        'font-size': '10px',
+        'font-size': '14px',
+        'font-weight': 700,
         'text-valign': 'bottom',
         'text-halign': 'center',
-        'text-margin-y': 4,
+        'text-margin-y': 8,
         'border-width': 2,
-        'border-color': '#161B22',
+        'border-color': '#222A35',
         'transition-property': 'background-color, border-color, border-width, width, height',
         'transition-duration': 300
       }
@@ -93,28 +154,32 @@ export default function NetworkGraph() {
         'background-color': '#FF3333',
         'border-color': '#FF0000',
         'border-width': 4,
-        'underlay-color': '#FF0000',
-        'underlay-padding': 6,
-        'underlay-opacity': 0.6,
       }
     },
     {
       selector: 'node[?isProtected]',
       style: {
+        'background-color': '#2ECC71',
+        'border-color': '#1FA765',
+        'border-width': 4
+      }
+    },
+    {
+      selector: 'node[?isCurrentUser]',
+      style: {
         'border-color': '#2ECC71',
-        'border-width': 4,
-        'border-style': 'double'
+        'border-width': 3
       }
     },
     {
       selector: 'edge',
       style: {
-        'width': 1.5,
-        'line-color': '#30363D',
-        'target-arrow-color': '#30363D',
+        'width': 2.5,
+        'line-color': '#26313D',
+        'target-arrow-color': '#26313D',
         'target-arrow-shape': 'triangle',
-        'curve-style': 'bezier',
-        'opacity': 0.6,
+        'curve-style': 'straight',
+        'opacity': 0.8,
         'transition-property': 'line-color, target-arrow-color, width',
         'transition-duration': 200
       }
@@ -214,17 +279,17 @@ export default function NetworkGraph() {
 
   const getPostReceivers = (post: Post) => {
     if (!currentUser) return [];
+    const manualEdges = getManualShareEdges(post);
     return users.filter(u => 
-      edges.some(e => e.source === currentUser.id && e.target === u.id) &&
-      post.sharedTo.includes(u.id)
+      manualEdges.some(e => e.source === currentUser.id && e.target === u.id)
     );
   };
 
   const getPostSenders = (post: Post) => {
     if (!currentUser) return [];
+    const manualEdges = getManualShareEdges(post);
     return users.filter(u => 
-      edges.some(e => e.source === u.id && e.target === currentUser.id) &&
-      (post.sharedBy.includes(u.id) || post.authorId === u.id)
+      manualEdges.some(e => e.source === u.id && e.target === currentUser.id)
     );
   };
 

@@ -26,6 +26,7 @@ export type Post = {
   likedBy: string[];      // user IDs who liked
   sharedBy: string[];     // user IDs who shared — drives visibility
   sharedTo: string[];     // user IDs who explicitly received the share
+  shareEdges: Edge[];     // manual sender -> receiver share trail
   aiChecked: boolean;   // true once AI has analyzed
 };
 
@@ -56,6 +57,7 @@ export type ContainmentResult = {
   protectedIds: string[];        // degree centrality protected nodes
   greedyProtectedIds?: string[]; // greedy algorithm protected nodes
   authorId: string;
+  isAutomated?: boolean;
 };
 
 export type AppContextType = {
@@ -112,12 +114,11 @@ function generateNetworkData() {
   const users: User[] = [];
   const edges: Edge[] = [];
   const rand = seededRand(42);
-
-  // Each user gets a unique following-count between 6 and 40
+  // Create a sparse, clustered network topology so that algorithms have actual bottlenecks to protect.
+  // Each user gets 1 to 6 outgoing edges.
   const followerCounts: number[] = [];
   for (let i = 0; i < 100; i++) {
-    // Unique count: 6 + deterministic random spread up to 34 extra
-    const count = 6 + Math.floor(rand() * 35);
+    const count = 1 + Math.floor(rand() * 6);
     followerCounts.push(count);
   }
 
@@ -127,7 +128,8 @@ function generateNetworkData() {
       name: `User ${i}`,
       username: `user${i}`,
       avatar: i < 10 ? `U${i}` : `${i}`,
-      community: i,
+      // Assign communities 1-5 based on index chunks
+      community: Math.floor(i / 20) + 1,
       followers: 0,
       following: [],
       isInfected: false,
@@ -135,20 +137,21 @@ function generateNetworkData() {
     });
   }
 
-  // Build edges: each user follows exactly followerCounts[i] unique other users
+  // Build edges: bias heavily towards same community to create distinct echo chambers,
+  // with a few random long-range bridges.
   for (let i = 0; i < 100; i++) {
     const target = followerCounts[i];
     let attempts = 0;
-    while (users[i].following.length < target && attempts < 500) {
+    while (users[i].following.length < target && attempts < 100) {
       attempts++;
-      // Prefer nearby users (simulate social clusters), but allow random too
       const r = rand();
       let j: number;
-      if (r < 0.6) {
-        // nearby cluster
-        j = (i + 1 + Math.floor(rand() * 20)) % 100;
+      if (r < 0.85) {
+        // 85% chance to connect within the same community (chunk of 20)
+        const commStart = Math.floor(i / 20) * 20;
+        j = commStart + Math.floor(rand() * 20);
       } else {
-        // global random
+        // 15% chance for a long-range bridge to another community
         j = Math.floor(rand() * 100);
       }
       if (j === i) continue;
@@ -157,6 +160,18 @@ function generateNetworkData() {
         users[i].following.push(tid);
         users[j].followers += 1;
         edges.push({ source: sid, target: tid });
+      }
+    }
+  }
+
+  // Force at least one massive hub (User 1) to guarantee Degree Centrality has an obvious target
+  // and force a few clear bridges so Greedy has obvious targets.
+  for (let i = 1; i <= 3; i++) {
+    for (let j = 10; j < 40; j++) {
+      if (rand() > 0.5 && !users[i].following.includes(`u${j}`)) {
+        users[i].following.push(`u${j}`);
+        users[j].followers += 1;
+        edges.push({ source: `u${i}`, target: `u${j}` });
       }
     }
   }
@@ -182,7 +197,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [users, setUsers]           = useState<User[]>([]);
   const [edges, setEdges]           = useState<Edge[]>([]);
   const [posts, setPosts]           = useState<Post[]>(
-    loadJSON<Post[]>(POSTS_KEY, []).map(p => ({ ...p, timestamp: new Date(p.timestamp) }))
+    loadJSON<Post[]>(POSTS_KEY, []).map(p => ({ ...p, shareEdges: p.shareEdges ?? [], timestamp: new Date(p.timestamp) }))
   );
   const [currentUser, setCurrentUser] = useState<User | null>(null);
 
@@ -244,7 +259,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!user) return [];
     const blockedIds = blocks[userId] || [];
     return posts.filter(p => {
-      if (p.infected) return false;                       // Remove contained misinformation
       if (blockedIds.includes(p.authorId)) return false; // blocked author
       if (p.authorId === userId) return true;             // own posts always visible
       if (p.sharedTo.includes(userId)) return true;       // explicitly shared with you
@@ -298,26 +312,93 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const sharePost = (postId: string, targetUserIds: string[]) => {
     if (!currentUser) { notify('⚠️ Log in to share posts'); return; }
     if (targetUserIds.length === 0) return;
+    
+    const cr = containmentResults.find(r => r.postId === postId);
+    let actualNewTargets: string[] = [];
+
     setPosts(prev => prev.map(p => {
       if (p.id !== postId) return p;
-      if (p.infected) {
-        notify('🚫 Cannot share — this post has been confirmed as misinformation!');
-        return p;
-      }
-      // Add only unique target user IDs that aren't already in sharedTo
+      
       const newTargets = targetUserIds.filter(id => !p.sharedTo.includes(id));
+      actualNewTargets = newTargets;
+      
       if (newTargets.length === 0) {
         notify('ℹ️ Already shared with these users');
         return p;
       }
+
+      if (p.infected) {
+        notify('⚠️ Shared successfully, but this post was flagged as misinformation! Algorithms will minimize spread in Dashboard.');
+      } else {
+        notify('🔁 Shared successfully!');
+      }
+
       return { 
         ...p, 
         shares: p.shares + newTargets.length, 
         sharedBy: p.sharedBy.includes(currentUser.id) ? p.sharedBy : [...p.sharedBy, currentUser.id],
-        sharedTo: [...p.sharedTo, ...newTargets]
+        sharedTo: [...p.sharedTo, ...newTargets],
+        shareEdges: [
+          ...(p.shareEdges ?? []),
+          ...newTargets.map(targetId => ({ source: currentUser.id, target: targetId }))
+        ]
       };
     }));
-    notify('🔁 Shared successfully!');
+    
+    // Update dashboard simulation dynamically based on actual manual sharing
+    if (actualNewTargets.length > 0 && cr && !cr.isAutomated) {
+      setContainmentResults(prev => prev.map(r => {
+        if (r.postId !== postId) return r;
+        
+        const rFlat = r.rightWaves.flat();
+        const gFlat = r.greedyWaves ? r.greedyWaves.flat() : [];
+        
+        const newRightWave: string[] = [];
+        const newGreedyWave: string[] = [];
+        const newLeftWave: string[] = []; // Track unmitigated spread for layout calculation
+        
+        actualNewTargets.forEach(id => {
+          // Unmitigated logic (for graph layout calculation)
+          if (!r.leftWaves.flat().includes(id)) {
+            newLeftWave.push(id);
+          }
+          // Degree Centrality logic
+          if (rFlat.includes(currentUser.id) && !r.protectedIds.includes(id) && !rFlat.includes(id)) {
+            newRightWave.push(id);
+          }
+          // Greedy algorithm logic
+          if (gFlat.includes(currentUser.id) && !(r.greedyProtectedIds || []).includes(id) && !gFlat.includes(id)) {
+            newGreedyWave.push(id);
+          }
+        });
+        
+        const updated = { ...r };
+        if (newLeftWave.length > 0) {
+          updated.leftWaves = [...r.leftWaves, newLeftWave];
+          updated.leftTotal += newLeftWave.length;
+        }
+        if (newRightWave.length > 0) {
+          updated.rightWaves = [...r.rightWaves, newRightWave];
+          updated.rightTotal += newRightWave.length;
+        }
+        if (newGreedyWave.length > 0) {
+          updated.greedyWaves = [...(r.greedyWaves || []), newGreedyWave];
+          updated.greedyTotal = (updated.greedyTotal || 0) + newGreedyWave.length;
+        }
+        
+        // Use timeout to avoid changing other state during render/commit
+        setTimeout(() => {
+          // We don't save to localStorage immediately inside the state updater since we don't have all the state,
+          // but AppProvider has an effect? No, we should just let it be updated in memory and CR_KEY is saved in saveContainmentResult.
+          // Wait, AppContext doesn't have a useEffect for containmentResults. 
+          // Let's just saveJSON here.
+          const freshCr = loadJSON<ContainmentResult[]>(CR_KEY, []).map(x => x.postId === postId ? updated : x);
+          saveJSON(CR_KEY, freshCr);
+        }, 0);
+        
+        return updated;
+      }));
+    }
   };
 
   const likePost = (postId: string) => {
@@ -365,7 +446,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id, authorId, content,
       timestamp: new Date(),
       shares: 0, infected, explanation,
-      flaggedBy: [], likedBy: [], sharedBy: [], sharedTo: [], aiChecked: false,
+      flaggedBy: [], likedBy: [], sharedBy: [], sharedTo: [], shareEdges: [], aiChecked: false,
     }, ...prev]);
     return id;
   };
