@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { type User } from '../context/AppContext';
 import { useAppContext } from '../context/useAppContext';
-import { checkClaimWithGroq } from '../lib/groq';
+import { checkClaimWithAI } from '../lib/ai';
 import {
   ShieldAlert, Flag, MessageSquare, Heart, Repeat2, Send,
   X, Loader2, Bot, LogIn, LogOut, Info, CheckCircle2,
@@ -13,7 +13,7 @@ const COMMUNITY_COLORS: Record<number, string> = {
   1: '#E8453C', 2: '#4A90D9', 3: '#2ECC71', 4: '#F5A623', 5: '#9B59B6',
 };
 
-const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY as string;
+const AI_API_KEY = import.meta.env.VITE_AI_API_KEY as string;
 
 // ─── Account Switcher ────────────────────────────────────────────────────────
 function AccountSwitcher() {
@@ -215,11 +215,11 @@ function AccountSwitcher() {
 }
 
 // ─── Post Card ───────────────────────────────────────────────────────────────
-function PostCard({ post, onGroqTrigger }: {
+function PostCard({ post, onAITrigger }: {
   post: ReturnType<typeof useAppContext>['posts'][0];
-  onGroqTrigger: (postId: string, content: string) => void;
+  onAITrigger: (postId: string, content: string) => void;
 }) {
-  const { users, currentUser, sharePost, flagPost, likePost, blockUser, unblockUser, blockedByCurrentUser, notify } = useAppContext();
+  const { users, currentUser, edges, sharePost, flagPost, likePost, blockUser, unblockUser, blockedByCurrentUser, notify } = useAppContext();
   const author = users.find(u => u.id === post.authorId);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [shareSearch, setShareSearch] = useState('');
@@ -239,9 +239,9 @@ function PostCard({ post, onGroqTrigger }: {
   };
 
   const handleFlag = () => {
-    const { shouldRunGroq } = flagPost(post.id);
-    if (shouldRunGroq) {
-      onGroqTrigger(post.id, post.content);
+    const { shouldRunAI } = flagPost(post.id);
+    if (shouldRunAI) {
+      onAITrigger(post.id, post.content);
     }
   };
 
@@ -260,8 +260,11 @@ function PostCard({ post, onGroqTrigger }: {
   };
 
   const shareFilteredUsers = users
-    .filter(u => u.id !== currentUser?.id && (u.username.includes(shareSearch.toLowerCase()) || u.name.toLowerCase().includes(shareSearch.toLowerCase())))
-    .slice(0, 15);
+    .filter(u => 
+      u.id !== currentUser?.id && 
+      edges.some(e => e.source === currentUser?.id && e.target === u.id) &&
+      (u.username.toLowerCase().includes(shareSearch.toLowerCase()) || u.name.toLowerCase().includes(shareSearch.toLowerCase()))
+    );
 
   if (isBlocked) {
     return (
@@ -288,14 +291,14 @@ function PostCard({ post, onGroqTrigger }: {
         </div>
       )}
 
-      {/* Groq checking indicator */}
-      {!post.infected && post.flaggedBy.length >= 3 && !post.groqChecked && (
+      {/* AI checking indicator */}
+      {!post.infected && post.flaggedBy.length >= 3 && !post.aiChecked && (
         <div className="absolute top-0 left-0 right-0 bg-amber-500/80 text-white text-xs font-bold py-1 px-3 flex items-center justify-center gap-1.5 animate-pulse">
-          <Loader2 className="w-3.5 h-3.5 animate-spin" /> Sending to Groq AI for fact-checking…
+          <Loader2 className="w-3.5 h-3.5 animate-spin" /> Fact-checking with AI…
         </div>
       )}
 
-      <div className={cn("flex gap-4", (post.infected || (post.flaggedBy.length >= 3 && !post.groqChecked)) && "pt-5")}>
+      <div className={cn("flex gap-4", (post.infected || (post.flaggedBy.length >= 3 && !post.aiChecked)) && "pt-5")}>
         {/* Avatar */}
         <div
           className="w-11 h-11 rounded-full flex items-center justify-center shrink-0 font-extrabold text-white text-sm"
@@ -328,7 +331,7 @@ function PostCard({ post, onGroqTrigger }: {
               post.infected ? "bg-shieldRed/5 border-shieldRed/10" : "bg-shieldGreen/5 border-shieldGreen/10"
             )}>
               <Bot className={cn("w-4 h-4 shrink-0 mt-0.5", post.infected ? "text-shieldRed" : "text-shieldGreen")} />
-              <span className="text-textSecondary"><strong className="text-textPrimary">Groq Analysis:</strong> {post.explanation}</span>
+              <span className="text-textSecondary"><strong className="text-textPrimary">AI Analysis:</strong> {post.explanation}</span>
             </div>
           )}
 
@@ -370,10 +373,10 @@ function PostCard({ post, onGroqTrigger }: {
             {/* Flag — disabled on own posts or already infected */}
             <button
               onClick={handleFlag}
-              disabled={isOwnPost || post.infected || post.groqChecked}
+              disabled={isOwnPost || post.infected || post.aiChecked}
               className={cn(
                 "flex items-center gap-1.5 transition-colors group",
-                isOwnPost || post.infected || post.groqChecked
+                isOwnPost || post.infected || post.aiChecked
                   ? "opacity-30 cursor-not-allowed"
                   : hasFlagged
                   ? "text-amber-400"
@@ -492,7 +495,7 @@ function PostCard({ post, onGroqTrigger }: {
 export default function SocialFeed() {
   const {
     posts, users, edges, currentUser, addPost,
-    markPostGroqChecked, addHistory, notify,
+    markPostAIChecked, addHistory, notify,
     getVisiblePosts, saveContainmentResult, misinfoWarnings, dismissWarning
   } = useAppContext();
 
@@ -500,11 +503,11 @@ export default function SocialFeed() {
   const [postContent, setPostContent] = useState('');
   const [isPosting, setIsPosting] = useState(false);
 
-  // Groq / containment state
-  const [isGroqChecking, setIsGroqChecking] = useState(false);
+  // AI / containment state
+  const [isAIChecking, setIsAIChecking] = useState(false);
 
   const budgetK = 5;
-  const spreadProbability = 0.4;
+  const spreadProbability = 1.0;
 
   const getDegreeProtected = (k: number, authorId: string): Set<string> => {
     const inDegrees = new Map<string, number>();
@@ -518,7 +521,7 @@ export default function SocialFeed() {
 
   // No longer needed: local simulation state handlers
 
-  // ── Publish post (no Groq — just post immediately) ────────────────────────
+  // ── Publish post (no AI — just post immediately) ────────────────────────
   const handlePublish = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!postContent.trim() || !currentUser) return;
@@ -529,30 +532,30 @@ export default function SocialFeed() {
     setIsPosting(false);
   };
 
-  // ── Groq triggered when post reaches 3 flags ─────────────────────────────
-  const triggerGroqCheck = async (postId: string, content: string) => {
-    if (!GROQ_API_KEY) {
-      notify('⚠️ VITE_GROQ_API_KEY missing — cannot fact-check flagged post');
+  // ── AI triggered when post reaches 3 flags ─────────────────────────────
+  const triggerAICheck = async (postId: string, content: string) => {
+    if (!AI_API_KEY) {
+      notify('⚠️ VITE_AI_API_KEY missing — cannot fact-check flagged post');
       return;
     }
-    setIsGroqChecking(true);
+    setIsAIChecking(true);
 
     try {
-      const res = await checkClaimWithGroq(content, GROQ_API_KEY);
-      setIsGroqChecking(false);
+      const res = await checkClaimWithAI(content, AI_API_KEY);
+      setIsAIChecking(false);
 
       if (!res.isMisinformation) {
-        markPostGroqChecked(postId, false, res.explanation);
-        notify('✅ Groq verified this post as TRUE — no misinformation found.');
+        markPostAIChecked(postId, false, res.explanation);
+        notify('✅ AI verified this post as TRUE — no misinformation found.');
         return;
       }
 
       // Misinformation confirmed — run containment sim
       const postAuthor = posts.find(p => p.id === postId);
       const author = users.find(u => u.id === postAuthor?.authorId);
-      if (!author) return;
+      if (!author || !postAuthor) return;
 
-      markPostGroqChecked(postId, true, res.explanation);
+      markPostAIChecked(postId, true, res.explanation);
 
       const activeAdj = new Map<string, string[]>();
       users.forEach(u => activeAdj.set(u.id, []));
@@ -561,12 +564,14 @@ export default function SocialFeed() {
       });
 
       const protectedSet = getDegreeProtected(budgetK, author.id);
+      const initialNodes = Array.from(new Set([author.id, ...(postAuthor.sharedBy || []), ...(postAuthor.sharedTo || [])]));
 
       const runBFS = (pSet: Set<string>): string[][] => {
-        if (pSet.has(author.id)) return [];
-        const infected = new Set<string>([author.id]);
-        const waves: string[][] = [[author.id]];
-        let wave = [author.id];
+        const validInitial = initialNodes.filter(id => !pSet.has(id));
+        if (validInitial.length === 0) return [];
+        const infected = new Set<string>(validInitial);
+        const waves: string[][] = [validInitial];
+        let wave = validInitial;
         while (wave.length > 0) {
           const next: string[] = [];
           for (const node of wave) {
@@ -588,7 +593,7 @@ export default function SocialFeed() {
       const reduction = leftTotal > 0 ? ((leftTotal - rightTotal) / leftTotal) * 100 : 0;
 
       addHistory({
-        strategy: 'Degree Centrality (Flag-triggered Groq)',
+        strategy: 'Degree Centrality (Flag-triggered AI)',
         infectedCount: rightTotal,
         reduction: `↓ ${reduction.toFixed(1)}%`
       });
@@ -613,12 +618,12 @@ export default function SocialFeed() {
 
       notify('⚠️ Misinformation confirmed! Containment simulation logged to Dashboard.');
     } catch (err: unknown) {
-      setIsGroqChecking(false);
+      setIsAIChecking(false);
       const message = err instanceof Error ? err.message : 'Unknown error';
-      notify(`❌ Groq check failed: ${message}`);
+      notify(`❌ AI check failed: ${message}`);
       
       // Fallback: Mark as checked but false so UI doesn't hang indefinitely
-      markPostGroqChecked(postId, false, `[Analysis Failed]: ${message}`);
+      markPostAIChecked(postId, false, `[Analysis Failed]: ${message}`);
     }
   };
 
@@ -660,7 +665,7 @@ export default function SocialFeed() {
             <ShieldAlert className="w-5 h-5 text-shieldRed shrink-0 mt-0.5" />
             <div className="flex-1">
               <h4 className="text-sm font-bold text-shieldRed">Misinformation Spread Alert</h4>
-              <p className="text-sm text-textPrimary mt-1">A post you shared was later flagged and confirmed by Groq AI as misinformation.</p>
+              <p className="text-sm text-textPrimary mt-1">A post you shared was later flagged and confirmed by AI as misinformation.</p>
               <div className="mt-2 text-xs text-textSecondary bg-background border border-borderColor rounded p-2 italic">
                 "{p.content}"
               </div>
@@ -673,13 +678,13 @@ export default function SocialFeed() {
         );
       })}
 
-      {/* ── Groq checking banner ── */}
-      {isGroqChecking && (
+      {/* ── AI checking banner ── */}
+      {isAIChecking && (
         <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl px-5 py-4 flex items-center gap-3 animate-pulse">
           <Loader2 className="w-5 h-5 text-amber-400 animate-spin shrink-0" />
           <div>
-            <p className="text-sm font-semibold text-amber-300">Groq AI is fact-checking a flagged post…</p>
-            <p className="text-xs text-textSecondary mt-0.5">This post received 3+ community flags and is being verified by Llama 3.3 70B</p>
+            <p className="text-sm font-semibold text-amber-300">AI is fact-checking a flagged post…</p>
+            <p className="text-xs text-textSecondary mt-0.5">This post received 3+ community flags and is being verified</p>
           </div>
         </div>
       )}
@@ -749,7 +754,7 @@ export default function SocialFeed() {
           <PostCard
             key={post.id}
             post={post}
-            onGroqTrigger={triggerGroqCheck}
+            onAITrigger={triggerAICheck}
           />
         ))}
         {filteredPosts.length === 0 && (

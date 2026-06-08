@@ -1,4 +1,4 @@
-export async function checkClaimWithGroq(claim: string, apiKey: string): Promise<{ isMisinformation: boolean; explanation: string }> {
+export async function checkClaimWithAI(claim: string, apiKey: string): Promise<{ isMisinformation: boolean; explanation: string }> {
   const url = 'https://api.groq.com/openai/v1/chat/completions';
 
   const systemPrompt = `You are an expert fact-checker and misinformation analyst. Your job is to evaluate whether a claim is factually true or is misinformation/fake news/conspiracy/rumor/unverifiable claim.
@@ -39,7 +39,7 @@ EXPLANATION: [One sentence explaining why, mentioning the key fact that makes it
     clearTimeout(timeoutId);
 
     if (!response.ok) {
-      throw new Error(`Groq API error ${response.status}`);
+      throw new Error(`AI API error ${response.status}`);
     }
 
     const data = await response.json();
@@ -49,11 +49,11 @@ EXPLANATION: [One sentence explaining why, mentioning the key fact that makes it
     const explanationMatch = text.match(/EXPLANATION:\s*(.*)/i);
 
     const isMisinformation = resultMatch ? resultMatch[1].toUpperCase() === 'FALSE' : false;
-    const explanation = explanationMatch ? explanationMatch[1].trim() : 'Analyzed by Groq AI (Llama 3 8B).';
+    const explanation = explanationMatch ? explanationMatch[1].trim() : 'Analyzed by AI.';
 
     return { isMisinformation, explanation };
   } catch (error: unknown) {
-    // If Groq fails or times out, immediately use a fast offline heuristic fallback
+    // If AI fails or times out, immediately use a fast offline heuristic fallback
     // so the UI never hangs and the user gets a snappy response.
     const lowerClaim = claim.toLowerCase();
     

@@ -1,32 +1,44 @@
 import { useState, useMemo, useRef, useCallback } from 'react';
 import CytoscapeComponent from 'react-cytoscapejs';
 import cytoscape from 'cytoscape';
-import { type User } from '../context/AppContext';
+import { type User, type Post } from '../context/AppContext';
 import { useAppContext } from '../context/useAppContext';
-import { ZoomIn, ZoomOut, Maximize, Settings2, ShieldCheck, Bug, Network } from 'lucide-react';
+import { ZoomIn, ZoomOut, Maximize, Settings2, ShieldCheck, Bug, Network, MessageSquare, ChevronDown, ChevronRight, User as UserIcon, Send } from 'lucide-react';
 import { cn } from '../lib/utils';
 
-// Define community colors
 const communityColors = {
-  1: '#E8453C', // Red
-  2: '#4A90D9', // Blue
-  3: '#2ECC71', // Green
-  4: '#F5A623', // Orange
-  5: '#9B59B6', // Purple
+  1: '#E8453C', 
+  2: '#4A90D9', 
+  3: '#2ECC71', 
+  4: '#F5A623', 
+  5: '#9B59B6', 
 };
 
 export default function NetworkGraph() {
-  const { users, edges, detectCommunities } = useAppContext();
-  const [layoutName, setLayoutName] = useState<'cose' | 'grid' | 'circle' | 'concentric'>('cose');
+  const { users, edges, currentUser, posts } = useAppContext();
+  const [layoutName, setLayoutName] = useState<'cose' | 'grid'>('cose');
   const [showLabels, setShowLabels] = useState(false);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   
+  const [criticalUsers, setCriticalUsers] = useState<{id: string, name: string, degree: number}[] | null>(null);
+  const [expandedPost, setExpandedPost] = useState<string | null>(null);
+  
   const cyRef = useRef<cytoscape.Core | null>(null);
 
-  // Convert context data to Cytoscape elements
+  // Convert context data to Cytoscape elements (Filtered)
   const elements = useMemo(() => {
-    const cyNodes = users.map(user => {
-      // Calculate a base size, scaling up if they have more followers.
+    let filteredUsers = users;
+    let filteredEdges = edges;
+
+    if (currentUser) {
+      filteredEdges = edges.filter(e => e.source === currentUser.id || e.target === currentUser.id);
+      const involvedIds = new Set<string>();
+      filteredEdges.forEach(e => { involvedIds.add(e.source); involvedIds.add(e.target); });
+      involvedIds.add(currentUser.id);
+      filteredUsers = users.filter(u => involvedIds.has(u.id));
+    }
+
+    const cyNodes = filteredUsers.map(user => {
       const size = 15 + Math.min(user.followers * 2, 40); 
       
       return {
@@ -36,7 +48,7 @@ export default function NetworkGraph() {
           community: user.community,
           followers: user.followers,
           size,
-          color: communityColors[user.community as keyof typeof communityColors] || '#ccc',
+          color: user.id === currentUser?.id ? '#4A90D9' : (communityColors[user.community as keyof typeof communityColors] || '#ccc'),
           isInfected: user.isInfected,
           isProtected: user.isProtected,
           rawUser: user
@@ -44,7 +56,7 @@ export default function NetworkGraph() {
       };
     });
 
-    const cyEdges = edges.map((edge, i) => ({
+    const cyEdges = filteredEdges.map((edge, i) => ({
       data: {
         id: `e${i}`,
         source: edge.source,
@@ -53,7 +65,7 @@ export default function NetworkGraph() {
     }));
 
     return [...cyNodes, ...cyEdges];
-  }, [users, edges]);
+  }, [users, edges, currentUser]);
 
   // Cy stylesheet
   const stylesheet = useMemo<cytoscape.StylesheetStyle[]>(() => [
@@ -180,47 +192,49 @@ export default function NetworkGraph() {
 
   }, []);
 
-  // Compute community stats
-  const communityStats = useMemo(() => {
-    const stats: Record<number, { size: number, internalEdges: number, influencers: {id:string, degree:number}[] }> = {};
-    for (let i = 1; i <= 5; i++) stats[i] = { size: 0, internalEdges: 0, influencers: [] };
-    
-    // Degrees for influencers
-    const inDegrees = new Map<string, number>();
-    users.forEach(u => inDegrees.set(u.id, 0));
-    edges.forEach(e => inDegrees.set(e.target, inDegrees.get(e.target)! + 1));
+  const runCriticality = () => {
+    const outDegrees = new Map<string, number>();
+    users.forEach(u => outDegrees.set(u.id, 0));
+    edges.forEach(e => outDegrees.set(e.source, outDegrees.get(e.source)! + 1));
 
-    users.forEach(u => {
-      if (stats[u.community]) {
-        stats[u.community].size++;
-        stats[u.community].influencers.push({ id: u.username, degree: inDegrees.get(u.id)! });
-      }
-    });
+    const ranked = users.map(u => ({
+      id: u.id,
+      name: u.username,
+      degree: outDegrees.get(u.id)! + (u.followers * 0.5)
+    })).sort((a, b) => b.degree - a.degree);
 
-    edges.forEach(e => {
-      const src = users.find(u => u.id === e.source);
-      const tgt = users.find(u => u.id === e.target);
-      if (src && tgt && src.community === tgt.community && stats[src.community]) {
-        stats[src.community].internalEdges++;
-      }
-    });
+    setCriticalUsers(ranked.slice(0, 5));
+  };
 
-    for (let i = 1; i <= 5; i++) {
-      stats[i].influencers.sort((a,b) => b.degree - a.degree);
-      stats[i].influencers = stats[i].influencers.slice(0, 2);
-    }
-    return stats;
-  }, [users, edges]);
+  // Get user's posts for User Analysis
+  const userPosts = useMemo(() => {
+    if (!currentUser) return [];
+    return posts.filter(p => p.authorId === currentUser.id || p.sharedBy.includes(currentUser.id) || p.sharedTo.includes(currentUser.id));
+  }, [posts, currentUser]);
+
+  const getPostReceivers = (post: Post) => {
+    if (!currentUser) return [];
+    return users.filter(u => 
+      edges.some(e => e.source === currentUser.id && e.target === u.id) &&
+      post.sharedTo.includes(u.id)
+    );
+  };
+
+  const getPostSenders = (post: Post) => {
+    if (!currentUser) return [];
+    return users.filter(u => 
+      edges.some(e => e.source === u.id && e.target === currentUser.id) &&
+      (post.sharedBy.includes(u.id) || post.authorId === u.id)
+    );
+  };
 
   return (
     <div className="h-full flex flex-col -m-4 md:-m-6 relative">
-      {/* Top Header Overlay */}
       <div className="absolute top-6 left-6 z-10 pointer-events-none">
         <h2 className="text-2xl font-semibold text-white tracking-tight drop-shadow-md">Network Graph</h2>
-        <p className="text-sm text-gray-300 mt-1 drop-shadow-md">Visualizing {users.length} nodes and {edges.length} connections.</p>
+        <p className="text-sm text-gray-300 mt-1 drop-shadow-md">Visualizing {elements.length} components.</p>
       </div>
 
-      {/* Main Cytoscape View */}
       <div className="flex-1 bg-background relative overflow-hidden">
         <CytoscapeComponent
           elements={elements}
@@ -239,21 +253,19 @@ export default function NetworkGraph() {
           <Settings2 className="w-4 h-4" /> Controls
         </div>
         
-        <button onClick={detectCommunities} className="w-full py-2 bg-shieldBlue hover:bg-shieldBlue/90 text-white rounded-md text-sm font-medium transition-colors flex items-center justify-center gap-2">
-          <Network className="w-4 h-4" /> Detect Communities
+        <button onClick={runCriticality} className="w-full py-2 bg-shieldRed hover:bg-shieldRed/90 text-white rounded-md text-sm font-medium transition-colors flex items-center justify-center gap-2">
+          <Network className="w-4 h-4" /> Run Criticality
         </button>
 
         <div>
           <label className="text-xs text-gray-400 mb-1.5 block">Layout Algorithm</label>
           <select 
             value={layoutName} 
-            onChange={(e) => setLayoutName(e.target.value as 'cose' | 'grid' | 'circle' | 'concentric')}
+            onChange={(e) => setLayoutName(e.target.value as 'cose' | 'grid')}
             className="w-full bg-background border border-white/10 rounded-md text-sm text-white px-3 py-2 outline-none focus:border-shieldBlue"
           >
             <option value="cose">Force-directed (CoSE)</option>
-            <option value="circle">Circular</option>
             <option value="grid">Grid</option>
-            <option value="concentric">Concentric</option>
           </select>
         </div>
 
@@ -284,6 +296,20 @@ export default function NetworkGraph() {
             <ZoomIn className="w-4 h-4" />
           </button>
         </div>
+
+        {criticalUsers && (
+          <div className="mt-2 border-t border-white/10 pt-4">
+            <h4 className="text-xs text-gray-400 uppercase font-bold mb-2">Most Critical Users</h4>
+            <div className="space-y-2">
+              {criticalUsers.map((u, i) => (
+                <div key={u.id} className="flex items-center justify-between bg-background rounded p-2 text-sm border border-shieldRed/20">
+                  <span className="font-semibold text-gray-200">#{i+1} {u.name}</span>
+                  <span className="text-shieldRed text-xs font-bold">{u.degree}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Node Details Popup (if selected) */}
@@ -333,31 +359,69 @@ export default function NetworkGraph() {
         </div>
       )}
 
-      {/* Legend & Communities Panel */}
-      <div className="absolute bottom-6 left-6 flex flex-col gap-4 z-10 max-w-sm">
+      {/* User Analysis Panel */}
+      <div className="absolute bottom-6 left-6 flex flex-col gap-4 z-10 w-80">
         <div className="bg-surface/90 backdrop-blur-md border border-borderColor rounded-xl p-4 shadow-xl text-sm">
-          <h4 className="font-semibold mb-3 border-b border-borderColor pb-2">Community Analysis</h4>
-          <div className="space-y-3 max-h-48 overflow-y-auto pr-2">
-            {[1, 2, 3, 4, 5].map(id => {
-              const stat = communityStats[id];
-              if (stat.size === 0) return null;
-              const riskLevel = stat.internalEdges > stat.size * 1.5 ? 'High' : (stat.internalEdges > stat.size ? 'Medium' : 'Low');
-              const riskColor = riskLevel === 'High' ? 'text-shieldRed' : (riskLevel === 'Medium' ? 'text-shieldOrange' : 'text-shieldGreen');
-              return (
-                <div key={id} className="flex gap-3 text-xs">
-                  <div className="w-3 h-3 rounded-full mt-1 shrink-0" style={{ backgroundColor: communityColors[id as keyof typeof communityColors] }} />
-                  <div>
-                    <div className="flex justify-between items-center gap-4">
-                      <span className="font-medium">Community {id}</span>
-                      <span className="text-textSecondary text-[10px]">{stat.size} nodes</span>
-                    </div>
-                    <p className="text-textSecondary mt-0.5">Top: {stat.influencers.map(i => i.id).join(', ')}</p>
-                    <p className="mt-0.5">Risk: <span className={`font-medium ${riskColor}`}>{riskLevel}</span></p>
+          <h4 className="font-semibold mb-3 border-b border-borderColor pb-2 flex items-center gap-2">
+            <UserIcon className="w-4 h-4" /> User Analysis
+          </h4>
+          {!currentUser ? (
+            <div className="text-textSecondary text-xs py-4 text-center">Log in to see user analysis</div>
+          ) : (
+            <div className="space-y-3 max-h-64 overflow-y-auto pr-2">
+              {userPosts.length === 0 ? (
+                <div className="text-textSecondary text-xs py-2 text-center">No post interactions found.</div>
+              ) : userPosts.map(post => {
+                const isExpanded = expandedPost === post.id;
+                const receivers = getPostReceivers(post);
+                const senders = getPostSenders(post);
+                return (
+                  <div key={post.id} className="bg-background border border-white/5 rounded-lg overflow-hidden">
+                    <button 
+                      onClick={() => setExpandedPost(isExpanded ? null : post.id)}
+                      className="w-full text-left p-3 hover:bg-white/5 transition-colors flex items-center justify-between"
+                    >
+                      <div className="flex-1 min-w-0 pr-2">
+                        <p className="text-xs text-gray-300 truncate font-medium flex items-center gap-1.5">
+                          <MessageSquare className="w-3 h-3 text-shieldBlue" /> 
+                          {post.content}
+                        </p>
+                      </div>
+                      {isExpanded ? <ChevronDown className="w-4 h-4 text-gray-500" /> : <ChevronRight className="w-4 h-4 text-gray-500" />}
+                    </button>
+                    {isExpanded && (
+                      <div className="px-3 pb-3 pt-1 border-t border-white/5 bg-white/[0.02]">
+                        <div className="mb-2">
+                          <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider mb-1 flex items-center gap-1">
+                            <Send className="w-3 h-3" /> Sent To ({receivers.length})
+                          </p>
+                          {receivers.length > 0 ? (
+                            <div className="flex flex-wrap gap-1">
+                              {receivers.map(r => (
+                                <span key={r.id} className="text-[10px] bg-shieldBlue/20 text-shieldBlue px-1.5 py-0.5 rounded">@{r.username}</span>
+                              ))}
+                            </div>
+                          ) : <span className="text-[10px] text-gray-600 italic">None</span>}
+                        </div>
+                        <div>
+                          <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider mb-1 flex items-center gap-1">
+                            <Network className="w-3 h-3" /> Received From ({senders.length})
+                          </p>
+                          {senders.length > 0 ? (
+                            <div className="flex flex-wrap gap-1">
+                              {senders.map(s => (
+                                <span key={s.id} className="text-[10px] bg-shieldOrange/20 text-shieldOrange px-1.5 py-0.5 rounded">@{s.username}</span>
+                              ))}
+                            </div>
+                          ) : <span className="text-[10px] text-gray-600 italic">None</span>}
+                        </div>
+                      </div>
+                    )}
                   </div>
-                </div>
-              )
-            })}
-          </div>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         <div className="bg-surface/90 backdrop-blur-md border border-borderColor rounded-xl p-3 shadow-xl flex gap-6 text-xs text-textSecondary">

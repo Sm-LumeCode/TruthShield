@@ -26,7 +26,7 @@ export type Post = {
   likedBy: string[];      // user IDs who liked
   sharedBy: string[];     // user IDs who shared — drives visibility
   sharedTo: string[];     // user IDs who explicitly received the share
-  groqChecked: boolean;   // true once Groq has analyzed
+  aiChecked: boolean;   // true once AI has analyzed
 };
 
 export type HistoryRun = {
@@ -37,7 +37,7 @@ export type HistoryRun = {
   reduction: string;
 };
 
-/** Summary stored after Groq confirms misinformation — rendered on Dashboard */
+/** Summary stored after AI confirms misinformation — rendered on Dashboard */
 export type ContainmentResult = {
   postId: string;
   claim: string;
@@ -67,7 +67,7 @@ export type AppContextType = {
   getVisiblePosts: (userId: string) => Post[];
 
   sharePost: (postId: string, targetUserIds: string[]) => void;
-  flagPost: (postId: string) => { shouldRunGroq: boolean };
+  flagPost: (postId: string) => { shouldRunAI: boolean };
   likePost: (postId: string) => void;
   blockUser: (blockedId: string) => void;
   unblockUser: (blockedId: string) => void;
@@ -89,16 +89,34 @@ export type AppContextType = {
   addHistory: (run: Omit<HistoryRun, 'id' | 'timestamp'>) => void;
   detectCommunities: () => void;
   addPost: (content: string, authorId: string, infected: boolean, explanation?: string) => string;
-  markPostGroqChecked: (postId: string, infected: boolean, explanation: string) => void;
+  markPostAIChecked: (postId: string, infected: boolean, explanation: string) => void;
 };
 
 // eslint-disable-next-line react-refresh/only-export-components
 export const AppContext = createContext<AppContextType | undefined>(undefined);
 
 // ─── Network generator ──────────────────────────────────────────────────────
+// Seeded pseudo-random so network is stable across page reloads
+function seededRand(seed: number): () => number {
+  let s = seed;
+  return () => {
+    s = (s * 1664525 + 1013904223) & 0xffffffff;
+    return (s >>> 0) / 0xffffffff;
+  };
+}
+
 function generateNetworkData() {
   const users: User[] = [];
   const edges: Edge[] = [];
+  const rand = seededRand(42);
+
+  // Each user gets a unique following-count between 6 and 40
+  const followerCounts: number[] = [];
+  for (let i = 0; i < 100; i++) {
+    // Unique count: 6 + deterministic random spread up to 34 extra
+    const count = 6 + Math.floor(rand() * 35);
+    followerCounts.push(count);
+  }
 
   for (let i = 0; i < 100; i++) {
     users.push({
@@ -114,17 +132,30 @@ function generateNetworkData() {
     });
   }
 
-  for (let i = 0; i < 300; i++) {
-    const si = Math.floor(Math.random() * 100);
-    let ti = Math.floor(Math.random() * 100);
-    if (Math.random() < 0.8) ti = (si + Math.floor(Math.random() * 15) - 7 + 100) % 100;
-    if (si === ti) { i--; continue; }
-    const sid = `u${si}`, tid = `u${ti}`;
-    if (!users[si].following.includes(tid)) {
-      users[si].following.push(tid);
-      users[ti].followers += 1;
-      edges.push({ source: sid, target: tid });
-    } else { i--; }
+  // Build edges: each user follows exactly followerCounts[i] unique other users
+  for (let i = 0; i < 100; i++) {
+    const target = followerCounts[i];
+    let attempts = 0;
+    while (users[i].following.length < target && attempts < 500) {
+      attempts++;
+      // Prefer nearby users (simulate social clusters), but allow random too
+      const r = rand();
+      let j: number;
+      if (r < 0.6) {
+        // nearby cluster
+        j = (i + 1 + Math.floor(rand() * 20)) % 100;
+      } else {
+        // global random
+        j = Math.floor(rand() * 100);
+      }
+      if (j === i) continue;
+      const sid = `u${i}`, tid = `u${j}`;
+      if (!users[i].following.includes(tid)) {
+        users[i].following.push(tid);
+        users[j].followers += 1;
+        edges.push({ source: sid, target: tid });
+      }
+    }
   }
 
   return { users, edges };
@@ -134,6 +165,7 @@ function generateNetworkData() {
 const BLOCK_KEY = 'ts_blocks';
 const WARN_KEY  = 'ts_warnings';
 const CR_KEY    = 'ts_containment';
+const POSTS_KEY = 'ts_posts';
 
 function loadJSON<T>(key: string, fallback: T): T {
   try { return JSON.parse(localStorage.getItem(key) || 'null') ?? fallback; } catch { return fallback; }
@@ -146,7 +178,9 @@ function saveJSON(key: string, val: unknown) {
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [users, setUsers]           = useState<User[]>([]);
   const [edges, setEdges]           = useState<Edge[]>([]);
-  const [posts, setPosts]           = useState<Post[]>([]);
+  const [posts, setPosts]           = useState<Post[]>(
+    loadJSON<Post[]>(POSTS_KEY, []).map(p => ({ ...p, timestamp: new Date(p.timestamp) }))
+  );
   const [currentUser, setCurrentUser] = useState<User | null>(null);
 
   const [blocks, setBlocks]         = useState<Record<string, string[]>>(loadJSON(BLOCK_KEY, {}));
@@ -159,6 +193,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [theme, setTheme]           = useState<'dark' | 'light'>('dark');
   const [notification, setNotification] = useState<string | null>(null);
   const [history, setHistory]       = useState<HistoryRun[]>([]);
+
+  useEffect(() => {
+    saveJSON(POSTS_KEY, posts);
+  }, [posts]);
 
   useEffect(() => {
     const { users: u, edges: e } = generateNetworkData();
@@ -203,6 +241,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!user) return [];
     const blockedIds = blocks[userId] || [];
     return posts.filter(p => {
+      if (p.infected) return false;                       // Remove contained misinformation
       if (blockedIds.includes(p.authorId)) return false; // blocked author
       if (p.authorId === userId) return true;             // own posts always visible
       if (p.sharedTo.includes(userId)) return true;       // explicitly shared with you
@@ -288,19 +327,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }));
   };
 
-  const flagPost = (postId: string): { shouldRunGroq: boolean } => {
-    if (!currentUser) { notify('⚠️ Log in to flag posts'); return { shouldRunGroq: false }; }
-    let shouldRunGroq = false;
+  const flagPost = (postId: string): { shouldRunAI: boolean } => {
+    if (!currentUser) { notify('⚠️ Log in to flag posts'); return { shouldRunAI: false }; }
+    let shouldRunAI = false;
     setPosts(prev => prev.map(p => {
       if (p.id !== postId) return p;
       if (p.flaggedBy.includes(currentUser.id)) { notify('ℹ️ You already flagged this post'); return p; }
       if (p.authorId === currentUser.id) { notify('⚠️ You cannot flag your own post'); return p; }
       const newFlaggedBy = [...p.flaggedBy, currentUser.id];
-      if (newFlaggedBy.length >= 3 && !p.groqChecked) shouldRunGroq = true;
+      if (newFlaggedBy.length >= 3 && !p.aiChecked) shouldRunAI = true;
       return { ...p, flaggedBy: newFlaggedBy };
     }));
-    notify(`🚩 Flagged (${shouldRunGroq ? 'sending to Groq AI...' : 'needs more flags to trigger AI'})`);
-    return { shouldRunGroq };
+    notify(`🚩 Flagged (${shouldRunAI ? 'sending to AI...' : 'needs more flags to trigger AI'})`);
+    return { shouldRunAI };
   };
 
   const addPost = (content: string, authorId: string, infected: boolean, explanation?: string): string => {
@@ -309,13 +348,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id, authorId, content,
       timestamp: new Date(),
       shares: 0, infected, explanation,
-      flaggedBy: [], likedBy: [], sharedBy: [], sharedTo: [], groqChecked: false,
+      flaggedBy: [], likedBy: [], sharedBy: [], sharedTo: [], aiChecked: false,
     }, ...prev]);
     return id;
   };
 
-  /** Called by SocialFeed after Groq returns a verdict */
-  const markPostGroqChecked = (postId: string, infected: boolean, explanation: string) => {
+  /** Called by SocialFeed after AI returns a verdict */
+  const markPostAIChecked = (postId: string, infected: boolean, explanation: string) => {
     setPosts(prev => prev.map(p => {
       if (p.id !== postId) return p;
 
@@ -331,7 +370,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
       }
 
-      return { ...p, groqChecked: true, infected, explanation };
+      return { ...p, aiChecked: true, infected, explanation };
     }));
   };
 
@@ -379,7 +418,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       containmentResults, saveContainmentResult,
       theme, toggleTheme, notification, notify,
       history, addHistory,
-      detectCommunities, addPost, markPostGroqChecked,
+      detectCommunities, addPost, markPostAIChecked,
     }}>
       {children}
     </AppContext.Provider>

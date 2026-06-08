@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
-import { type User, type ContainmentResult } from '../context/AppContext';
+import { type User, type ContainmentResult, type Edge } from '../context/AppContext';
 import { useAppContext } from '../context/useAppContext';
 import { Users, Link as LinkIcon, Component, Bug, Play, Activity, ShieldAlert, Clock, ChevronRight, Bot, Pause, SkipForward, RotateCcw, Shield, Info, CheckCircle2, ChevronDown, ChevronUp } from 'lucide-react';
 import { Link } from 'react-router-dom';
@@ -9,7 +9,7 @@ const COMMUNITY_COLORS: Record<number, string> = {
   1: '#E8453C', 2: '#4A90D9', 3: '#2ECC71', 4: '#F5A623', 5: '#9B59B6',
 };
 
-function SimulationCard({ result, users }: { result: ContainmentResult, users: User[] }) {
+function SimulationCard({ result, users, edges }: { result: ContainmentResult, users: User[], edges: Edge[] }) {
   const [isMinimized, setIsMinimized] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
@@ -18,7 +18,40 @@ function SimulationCard({ result, users }: { result: ContainmentResult, users: U
 
   const { leftWaves, rightWaves, protectedIds, authorId, budgetK, claim, explanation } = result;
   
-  const sortedUsersForGrid = useMemo(() => [...users].sort((a, b) => a.community - b.community), [users]);
+  const layout = useMemo(() => {
+    const width = 400;
+    const height = 300;
+    const nodes: { id: string, x: number, y: number, user: User, level: number }[] = [];
+    const links: { source: string, target: string, sourceX: number, sourceY: number, targetX: number, targetY: number }[] = [];
+    
+    const totalLevels = Math.max(leftWaves.length, 1);
+    const yStep = height / (totalLevels + 1);
+
+    leftWaves.forEach((wave, level) => {
+      const y = (level + 1) * yStep;
+      const count = wave.length;
+      const xStep = width / (count + 1);
+      
+      wave.forEach((nodeId, idx) => {
+        const x = (idx + 1) * xStep;
+        const user = users.find(u => u.id === nodeId);
+        if (user) nodes.push({ id: nodeId, x, y, user, level });
+      });
+    });
+
+    nodes.forEach(t => {
+      if (t.level === 0) return;
+      const possibleSources = nodes.filter(n => n.level === t.level - 1);
+      const incomingEdges = edges.filter(e => e.target === t.id && possibleSources.some(s => s.id === e.source));
+      if (incomingEdges.length > 0) {
+        const e = incomingEdges[0];
+        const s = nodes.find(n => n.id === e.source);
+        if (s) links.push({ source: s.id, target: t.id, sourceX: s.x, sourceY: s.y, targetX: t.x, targetY: t.y });
+      }
+    });
+
+    return { nodes, links };
+  }, [leftWaves, users, edges]);
 
   const maxSteps = Math.max(leftWaves.length, rightWaves.length) - 1;
   const isSimFinished = currentStep >= maxSteps;
@@ -68,12 +101,12 @@ function SimulationCard({ result, users }: { result: ContainmentResult, users: U
           {/* Claim card */}
           <div className="bg-background border border-shieldRed/20 rounded-lg p-4 space-y-2">
             <div className="text-xs font-bold text-shieldRed uppercase tracking-wider flex items-center gap-1.5">
-              <ShieldAlert className="w-3.5 h-3.5" /> Flagged & Confirmed by Groq
+              <ShieldAlert className="w-3.5 h-3.5" /> Flagged & Confirmed by AI
             </div>
             <p className="text-textPrimary font-medium text-sm italic">"{claim}"</p>
             <div className="flex gap-2 text-xs text-textSecondary bg-shieldRed/5 border border-shieldRed/10 rounded p-2.5">
               <Bot className="w-4 h-4 text-shieldBlue shrink-0 mt-0.5" />
-              <span><strong className="text-textPrimary">Groq Analysis:</strong> {explanation}</span>
+              <span><strong className="text-textPrimary">AI Analysis:</strong> {explanation}</span>
             </div>
           </div>
 
@@ -102,7 +135,7 @@ function SimulationCard({ result, users }: { result: ContainmentResult, users: U
               </button>
             </div>
             <div className="flex items-center gap-4 text-sm">
-              <span className="text-textSecondary">Step <strong className="text-textPrimary">{currentStep}</strong></span>
+              <span className="text-textSecondary">Time elapsed: <strong className="text-textPrimary">{currentStep * 30}s</strong></span>
               <span className="h-4 w-px bg-borderColor" />
               <span className="text-textSecondary">Algorithm: <strong className="text-shieldBlue">Degree Centrality</strong></span>
             </div>
@@ -126,23 +159,27 @@ function SimulationCard({ result, users }: { result: ContainmentResult, users: U
                 <div className="h-full bg-shieldRed transition-all duration-500" style={{ width: `${(leftInfected.size / Math.max(users.length, 1)) * 100}%` }} />
               </div>
               <div className="bg-background border border-borderColor rounded-xl p-3">
-                <div className="grid grid-cols-10 gap-1.5 justify-items-center">
-                  {sortedUsersForGrid.map(u => {
-                    const infected = leftInfected.has(u.id);
-                    const isSource = u.id === authorId;
+                <svg viewBox="0 0 400 300" className="w-full h-[300px] bg-background">
+                  {layout.links.map((link, i) => {
+                    const sInfected = leftInfected.has(link.source);
+                    const tInfected = leftInfected.has(link.target);
+                    const isActive = sInfected && tInfected;
                     return (
-                      <div
-                        key={u.id}
-                        onMouseEnter={() => setHoveredUserLeft(u)}
-                        onMouseLeave={() => setHoveredUserLeft(null)}
-                        className={cn("w-4 h-4 rounded-full border border-black/10 transition-all duration-300 cursor-help hover:scale-125 relative", infected && "scale-110 shadow-[0_0_6px_#E8453C]")}
-                        style={{ backgroundColor: infected ? '#E8453C' : COMMUNITY_COLORS[u.community] ?? '#9CA3AF' }}
-                      >
-                        {isSource && <span className="absolute inset-0 flex items-center justify-center text-[7px] font-black text-white">★</span>}
-                      </div>
+                      <line key={i} x1={link.sourceX} y1={link.sourceY} x2={link.targetX} y2={link.targetY} stroke={isActive ? '#E8453C' : '#333'} strokeWidth={isActive ? 2 : 1} opacity={isActive ? 1 : 0.3} />
                     );
                   })}
-                </div>
+                  {layout.nodes.map(node => {
+                    const infected = leftInfected.has(node.id);
+                    const isSource = node.id === authorId;
+                    return (
+                      <circle key={node.id} cx={node.x} cy={node.y} r={isSource ? 8 : 6} fill={infected ? '#E8453C' : (COMMUNITY_COLORS[node.user.community] ?? '#9CA3AF')} stroke="#111" strokeWidth={1} 
+                        onMouseEnter={() => setHoveredUserLeft(node.user)}
+                        onMouseLeave={() => setHoveredUserLeft(null)}
+                        className={cn("transition-all duration-300 cursor-pointer", infected && "drop-shadow-[0_0_6px_#E8453C]")}
+                      />
+                    );
+                  })}
+                </svg>
                 <div className="mt-2 text-[11px] text-textSecondary bg-surface/50 border border-borderColor rounded p-1.5 h-8 flex items-center justify-center text-center overflow-hidden">
                   {hoveredUserLeft
                     ? <span className="flex gap-2"><span className="w-2 h-2 rounded-full mt-0.5 shrink-0" style={{ backgroundColor: COMMUNITY_COLORS[hoveredUserLeft.community] }} /><strong>{hoveredUserLeft.name}</strong> · <strong className={leftInfected.has(hoveredUserLeft.id) ? 'text-shieldRed' : 'text-shieldGreen'}>{leftInfected.has(hoveredUserLeft.id) ? 'Infected' : 'Safe'}</strong></span>
@@ -168,25 +205,36 @@ function SimulationCard({ result, users }: { result: ContainmentResult, users: U
                 <div className="h-full bg-shieldGreen transition-all duration-500" style={{ width: `${(rightInfected.size / Math.max(users.length, 1)) * 100}%` }} />
               </div>
               <div className="bg-background border border-borderColor rounded-xl p-3">
-                <div className="grid grid-cols-10 gap-1.5 justify-items-center">
-                  {sortedUsersForGrid.map(u => {
-                    const infected = rightInfected.has(u.id);
-                    const protected_ = protectedSet.has(u.id);
-                    const isSource = u.id === authorId;
+                <svg viewBox="0 0 400 300" className="w-full h-[300px] bg-background">
+                  {layout.links.map((link, i) => {
+                    const sInfected = rightInfected.has(link.source);
+                    const tInfected = rightInfected.has(link.target);
+                    const isActive = sInfected && tInfected;
+                    const isBlocked = sInfected && protectedSet.has(link.target);
                     return (
-                      <div
-                        key={u.id}
-                        onMouseEnter={() => setHoveredUserRight(u)}
-                        onMouseLeave={() => setHoveredUserRight(null)}
-                        className={cn("w-4 h-4 rounded-full border border-black/10 transition-all duration-300 cursor-help hover:scale-125 relative", infected && "scale-110 shadow-[0_0_6px_#E8453C]", protected_ && !infected && "ring-1 ring-shieldGreen/60 scale-105")}
-                        style={{ backgroundColor: infected ? '#E8453C' : protected_ ? '#2ECC71' : COMMUNITY_COLORS[u.community] ?? '#9CA3AF' }}
-                      >
-                        {isSource && <span className="absolute inset-0 flex items-center justify-center text-[7px] font-black text-white">★</span>}
-                        {protected_ && !infected && <span className="absolute inset-0 flex items-center justify-center text-[8px]">🛡</span>}
-                      </div>
+                      <g key={i}>
+                        <line x1={link.sourceX} y1={link.sourceY} x2={link.targetX} y2={link.targetY} stroke={isActive ? '#E8453C' : '#333'} strokeWidth={isActive ? 2 : 1} opacity={isActive ? 1 : 0.3} strokeDasharray={isBlocked ? "4 4" : "none"} />
+                        {isBlocked && (
+                          <text x={(link.sourceX + link.targetX)/2} y={(link.sourceY + link.targetY)/2 - 4} fill="#2ECC71" fontSize="10" textAnchor="middle" fontWeight="bold" className="animate-in fade-in zoom-in duration-500">Message blocked</text>
+                        )}
+                      </g>
                     );
                   })}
-                </div>
+                  {layout.nodes.map(node => {
+                    const infected = rightInfected.has(node.id);
+                    const protected_ = protectedSet.has(node.id);
+                    const isSource = node.id === authorId;
+                    return (
+                      <g key={node.id}
+                        onMouseEnter={() => setHoveredUserRight(node.user)}
+                        onMouseLeave={() => setHoveredUserRight(null)}
+                      >
+                        <circle cx={node.x} cy={node.y} r={isSource ? 8 : (protected_ ? 8 : 6)} fill={infected ? '#E8453C' : protected_ ? '#2ECC71' : (COMMUNITY_COLORS[node.user.community] ?? '#9CA3AF')} stroke={protected_ ? '#2ECC71' : '#111'} strokeWidth={protected_ ? 2 : 1} className={cn("transition-all duration-300 cursor-pointer", infected && "drop-shadow-[0_0_6px_#E8453C]")} />
+                        {protected_ && <text x={node.x} y={node.y + 3} fontSize="8" textAnchor="middle" fill="#000">🛡</text>}
+                      </g>
+                    );
+                  })}
+                </svg>
                 <div className="mt-2 text-[11px] text-textSecondary bg-surface/50 border border-borderColor rounded p-1.5 h-8 flex items-center justify-center text-center overflow-hidden">
                   {hoveredUserRight
                     ? <span className="flex gap-2"><span className="w-2 h-2 rounded-full mt-0.5 shrink-0" style={{ backgroundColor: COMMUNITY_COLORS[hoveredUserRight.community] }} /><strong>{hoveredUserRight.name}</strong> · <strong className={protectedSet.has(hoveredUserRight.id) ? 'text-shieldGreen' : rightInfected.has(hoveredUserRight.id) ? 'text-shieldRed' : 'text-textSecondary'}>{protectedSet.has(hoveredUserRight.id) ? '🛡 Shielded' : rightInfected.has(hoveredUserRight.id) ? 'Infected' : 'Safe'}</strong></span>
@@ -279,7 +327,7 @@ export default function Dashboard() {
         <div className="space-y-4">
           <h3 className="text-lg font-bold text-textPrimary pt-4 border-t border-borderColor">Recent Misinformation Contained</h3>
           {containmentResults.map((result, idx) => (
-            <SimulationCard key={`${result.postId}-${idx}`} result={result} users={users} />
+            <SimulationCard key={`${result.postId}-${idx}`} result={result} users={users} edges={edges} />
           ))}
         </div>
       )}
