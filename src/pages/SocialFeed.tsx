@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { type User } from '../context/AppContext';
 import { useAppContext } from '../context/useAppContext';
 import { checkClaimWithAI } from '../lib/ai';
@@ -13,7 +13,7 @@ const COMMUNITY_COLORS: Record<number, string> = {
   1: '#E8453C', 2: '#4A90D9', 3: '#2ECC71', 4: '#F5A623', 5: '#9B59B6',
 };
 
-const AI_API_KEY = import.meta.env.VITE_AI_API_KEY as string;
+const AI_API_KEY = (import.meta.env.VITE_GROQ_API_KEY || import.meta.env.VITE_AI_API_KEY) as string;
 
 // ─── Account Switcher ────────────────────────────────────────────────────────
 function AccountSwitcher() {
@@ -505,9 +505,11 @@ export default function SocialFeed() {
 
   // AI / containment state
   const [isAIChecking, setIsAIChecking] = useState(false);
+  // Track which post IDs are currently being AI-checked to prevent duplicate calls
+  const checkingPostIds = useRef<Set<string>>(new Set());
 
   const budgetK = 5;
-  const spreadProbability = 1.0;
+  const spreadProbability = 0.35;
 
   const getDegreeProtected = (k: number, authorId: string): Set<string> => {
     const inDegrees = new Map<string, number>();
@@ -533,11 +535,14 @@ export default function SocialFeed() {
   };
 
   // ── AI triggered when post reaches 3 flags ─────────────────────────────
-  const triggerAICheck = async (postId: string, content: string) => {
+  const triggerAICheck = useCallback(async (postId: string, content: string) => {
     if (!AI_API_KEY) {
-      notify('⚠️ VITE_AI_API_KEY missing — cannot fact-check flagged post');
+      notify('⚠️ No API key found — set VITE_GROQ_API_KEY in .env to enable fact-checking');
+      markPostAIChecked(postId, false, '[No API key configured]');
       return;
     }
+    if (checkingPostIds.current.has(postId)) return; // already in-flight
+    checkingPostIds.current.add(postId);
     setIsAIChecking(true);
 
     try {
@@ -545,6 +550,7 @@ export default function SocialFeed() {
       setIsAIChecking(false);
 
       if (!res.isMisinformation) {
+        checkingPostIds.current.delete(postId);
         markPostAIChecked(postId, false, res.explanation);
         notify('✅ AI verified this post as TRUE — no misinformation found.');
         return;
@@ -553,7 +559,10 @@ export default function SocialFeed() {
       // Misinformation confirmed — run containment sim
       const postAuthor = posts.find(p => p.id === postId);
       const author = users.find(u => u.id === postAuthor?.authorId);
-      if (!author || !postAuthor) return;
+      if (!author || !postAuthor) {
+        checkingPostIds.current.delete(postId);
+        return;
+      }
 
       markPostAIChecked(postId, true, res.explanation);
 
@@ -587,15 +596,39 @@ export default function SocialFeed() {
 
       const lWaves = runBFS(new Set());
       const rWaves = runBFS(protectedSet);
-      
+
+      // ── Greedy: iteratively pick the node giving max marginal spread reduction ──
+      const greedySet = new Set<string>();
+      for (let gi = 0; gi < budgetK; gi++) {
+        let bestNode = '';
+        let minCount = Infinity;
+        for (const u of users) {
+          if (!greedySet.has(u.id) && !initialNodes.includes(u.id)) {
+            greedySet.add(u.id);
+            const count = runBFS(greedySet).flat().length;
+            if (count < minCount) { minCount = count; bestNode = u.id; }
+            greedySet.delete(u.id);
+          }
+        }
+        if (bestNode) greedySet.add(bestNode);
+      }
+      const gWaves = runBFS(greedySet);
+
       const leftTotal = lWaves.flat().length;
       const rightTotal = rWaves.flat().length;
+      const greedyTotal = gWaves.flat().length;
       const reduction = leftTotal > 0 ? ((leftTotal - rightTotal) / leftTotal) * 100 : 0;
+      const greedyReduction = leftTotal > 0 ? ((leftTotal - greedyTotal) / leftTotal) * 100 : 0;
 
       addHistory({
         strategy: 'Degree Centrality (Flag-triggered AI)',
         infectedCount: rightTotal,
         reduction: `↓ ${reduction.toFixed(1)}%`
+      });
+      addHistory({
+        strategy: 'Greedy Algorithm (Flag-triggered AI)',
+        infectedCount: greedyTotal,
+        reduction: `↓ ${greedyReduction.toFixed(1)}%`
       });
 
       const flaggedPost = posts.find(p => p.id === postId);
@@ -607,25 +640,43 @@ export default function SocialFeed() {
         explanation: res.explanation,
         leftTotal,
         rightTotal,
+        greedyTotal,
         savedPct: reduction,
         budgetK,
         sharerIds: flaggedPost ? flaggedPost.sharedBy : [],
         leftWaves: lWaves,
         rightWaves: rWaves,
+        greedyWaves: gWaves,
         protectedIds: Array.from(protectedSet),
+        greedyProtectedIds: Array.from(greedySet),
         authorId: author.id
       });
 
+      checkingPostIds.current.delete(postId);
       notify('⚠️ Misinformation confirmed! Containment simulation logged to Dashboard.');
     } catch (err: unknown) {
       setIsAIChecking(false);
+      checkingPostIds.current.delete(postId);
       const message = err instanceof Error ? err.message : 'Unknown error';
       notify(`❌ AI check failed: ${message}`);
-      
-      // Fallback: Mark as checked but false so UI doesn't hang indefinitely
+
+      // Fallback: Mark as checked so UI doesn't hang indefinitely
       markPostAIChecked(postId, false, `[Analysis Failed]: ${message}`);
     }
-  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [posts, users, edges, markPostAIChecked, addHistory, saveContainmentResult, notify]);
+
+  // ── Auto-recover posts stuck in "Fact-checking..." from a previous session ──
+  useEffect(() => {
+    const stuckPosts = posts.filter(
+      p => !p.aiChecked && !p.infected && p.flaggedBy.length >= 3
+    );
+    stuckPosts.forEach(p => {
+      triggerAICheck(p.id, p.content);
+    });
+  // Only run once on mount (posts starts populated from localStorage)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Filter and hide blocked user posts, and only show posts visible to current user
   const visiblePosts = currentUser ? getVisiblePosts(currentUser.id) : posts;

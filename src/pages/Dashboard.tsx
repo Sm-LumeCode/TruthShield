@@ -15,6 +15,7 @@ function SimulationCard({ result, users, edges }: { result: ContainmentResult, u
   const [currentStep, setCurrentStep] = useState(0);
   const [hoveredUserLeft, setHoveredUserLeft] = useState<User | null>(null);
   const [hoveredUserRight, setHoveredUserRight] = useState<User | null>(null);
+  const [hoveredUserGreedy, setHoveredUserGreedy] = useState<User | null>(null);
 
   const { leftWaves, rightWaves, protectedIds, authorId, budgetK, claim, explanation } = result;
   
@@ -53,7 +54,7 @@ function SimulationCard({ result, users, edges }: { result: ContainmentResult, u
     return { nodes, links };
   }, [leftWaves, users, edges]);
 
-  const maxSteps = Math.max(leftWaves.length, rightWaves.length) - 1;
+  const maxSteps = Math.max(leftWaves.length, rightWaves.length, result.greedyWaves?.length ?? 0) - 1;
   const isSimFinished = currentStep >= maxSteps;
 
   useEffect(() => {
@@ -72,7 +73,9 @@ function SimulationCard({ result, users, edges }: { result: ContainmentResult, u
 
   const leftInfected = useMemo(() => getInfectedAtStep(leftWaves, currentStep), [leftWaves, currentStep]);
   const rightInfected = useMemo(() => getInfectedAtStep(rightWaves, currentStep), [rightWaves, currentStep]);
+  const greedyInfected = useMemo(() => result.greedyWaves ? getInfectedAtStep(result.greedyWaves, currentStep) : new Set<string>(), [result.greedyWaves, currentStep]);
   const protectedSet = new Set(protectedIds);
+  const greedyProtectedSet = new Set(result.greedyProtectedIds ?? []);
 
   const leftTotal = leftWaves.flat().length;
   const rightTotal = rightWaves.flat().length;
@@ -88,7 +91,7 @@ function SimulationCard({ result, users, edges }: { result: ContainmentResult, u
           </div>
           <div>
             <h3 className="text-lg font-bold text-textPrimary">⚠️ Misinformation Containment Lab</h3>
-            <p className="text-xs text-textSecondary">{result.timestamp.toLocaleString()} · Left: uncontrolled · Right: Degree Centrality (K={budgetK})</p>
+            <p className="text-xs text-textSecondary">{result.timestamp.toLocaleString()} · No Mitigation vs Degree Centrality vs Greedy (K={budgetK})</p>
           </div>
         </div>
         <button className="p-1.5 hover:bg-background rounded-full text-textSecondary transition-colors">
@@ -137,13 +140,13 @@ function SimulationCard({ result, users, edges }: { result: ContainmentResult, u
             <div className="flex items-center gap-4 text-sm">
               <span className="text-textSecondary">Time elapsed: <strong className="text-textPrimary">{currentStep * 30}s</strong></span>
               <span className="h-4 w-px bg-borderColor" />
-              <span className="text-textSecondary">Algorithm: <strong className="text-shieldBlue">Degree Centrality</strong></span>
+              <span className="text-textSecondary">Algorithms: <strong className="text-shieldBlue">Degree Centrality</strong> <span className="text-textSecondary">vs</span> <strong className="text-shieldPurple">Greedy</strong></span>
             </div>
           </div>
 
           {/* Side-by-side grids */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* LEFT */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* LEFT — No Mitigation */}
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <div>
@@ -159,7 +162,7 @@ function SimulationCard({ result, users, edges }: { result: ContainmentResult, u
                 <div className="h-full bg-shieldRed transition-all duration-500" style={{ width: `${(leftInfected.size / Math.max(users.length, 1)) * 100}%` }} />
               </div>
               <div className="bg-background border border-borderColor rounded-xl p-3">
-                <svg viewBox="0 0 400 300" className="w-full h-[300px] bg-background">
+                <svg viewBox="0 0 400 300" className="w-full h-[240px] bg-background">
                   {layout.links.map((link, i) => {
                     const sInfected = leftInfected.has(link.source);
                     const tInfected = leftInfected.has(link.target);
@@ -172,7 +175,7 @@ function SimulationCard({ result, users, edges }: { result: ContainmentResult, u
                     const infected = leftInfected.has(node.id);
                     const isSource = node.id === authorId;
                     return (
-                      <circle key={node.id} cx={node.x} cy={node.y} r={isSource ? 8 : 6} fill={infected ? '#E8453C' : (COMMUNITY_COLORS[node.user.community] ?? '#9CA3AF')} stroke="#111" strokeWidth={1} 
+                      <circle key={node.id} cx={node.x} cy={node.y} r={isSource ? 8 : 6} fill={infected ? '#E8453C' : (COMMUNITY_COLORS[node.user.community] ?? '#9CA3AF')} stroke="#111" strokeWidth={1}
                         onMouseEnter={() => setHoveredUserLeft(node.user)}
                         onMouseLeave={() => setHoveredUserLeft(null)}
                         className={cn("transition-all duration-300 cursor-pointer", infected && "drop-shadow-[0_0_6px_#E8453C]")}
@@ -180,7 +183,7 @@ function SimulationCard({ result, users, edges }: { result: ContainmentResult, u
                     );
                   })}
                 </svg>
-                <div className="mt-2 text-[11px] text-textSecondary bg-surface/50 border border-borderColor rounded p-1.5 h-8 flex items-center justify-center text-center overflow-hidden">
+                <div className="mt-2 text-[11px] text-textSecondary bg-surface/50 border border-borderColor rounded p-1.5 h-7 flex items-center justify-center text-center overflow-hidden">
                   {hoveredUserLeft
                     ? <span className="flex gap-2"><span className="w-2 h-2 rounded-full mt-0.5 shrink-0" style={{ backgroundColor: COMMUNITY_COLORS[hoveredUserLeft.community] }} /><strong>{hoveredUserLeft.name}</strong> · <strong className={leftInfected.has(hoveredUserLeft.id) ? 'text-shieldRed' : 'text-shieldGreen'}>{leftInfected.has(hoveredUserLeft.id) ? 'Infected' : 'Safe'}</strong></span>
                     : <span className="flex items-center gap-1"><Info className="w-3 h-3" /> Hover a node</span>
@@ -189,23 +192,23 @@ function SimulationCard({ result, users, edges }: { result: ContainmentResult, u
               </div>
             </div>
 
-            {/* RIGHT */}
+            {/* MIDDLE — Degree Centrality */}
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <div>
                   <h4 className="font-bold text-sm text-textPrimary flex items-center gap-2">
-                    <Shield className="w-4 h-4 text-shieldGreen fill-shieldGreen/20" />
-                    Degree Centrality Shield
+                    <Shield className="w-4 h-4 text-shieldBlue fill-shieldBlue/20" />
+                    Degree Centrality
                   </h4>
                   <p className="text-xs text-textSecondary">Top {budgetK} hubs immunized</p>
                 </div>
-                <span className="text-xl font-black text-shieldGreen">{rightInfected.size} <span className="text-xs font-normal text-textSecondary">infected</span></span>
+                <span className="text-xl font-black text-shieldBlue">{rightInfected.size} <span className="text-xs font-normal text-textSecondary">infected</span></span>
               </div>
               <div className="h-2 bg-background border border-borderColor rounded-full overflow-hidden">
-                <div className="h-full bg-shieldGreen transition-all duration-500" style={{ width: `${(rightInfected.size / Math.max(users.length, 1)) * 100}%` }} />
+                <div className="h-full bg-shieldBlue transition-all duration-500" style={{ width: `${(rightInfected.size / Math.max(users.length, 1)) * 100}%` }} />
               </div>
               <div className="bg-background border border-borderColor rounded-xl p-3">
-                <svg viewBox="0 0 400 300" className="w-full h-[300px] bg-background">
+                <svg viewBox="0 0 400 300" className="w-full h-[240px] bg-background">
                   {layout.links.map((link, i) => {
                     const sInfected = rightInfected.has(link.source);
                     const tInfected = rightInfected.has(link.target);
@@ -215,7 +218,7 @@ function SimulationCard({ result, users, edges }: { result: ContainmentResult, u
                       <g key={i}>
                         <line x1={link.sourceX} y1={link.sourceY} x2={link.targetX} y2={link.targetY} stroke={isActive ? '#E8453C' : '#333'} strokeWidth={isActive ? 2 : 1} opacity={isActive ? 1 : 0.3} strokeDasharray={isBlocked ? "4 4" : "none"} />
                         {isBlocked && (
-                          <text x={(link.sourceX + link.targetX)/2} y={(link.sourceY + link.targetY)/2 - 4} fill="#2ECC71" fontSize="10" textAnchor="middle" fontWeight="bold" className="animate-in fade-in zoom-in duration-500">Message blocked</text>
+                          <text x={(link.sourceX + link.targetX)/2} y={(link.sourceY + link.targetY)/2 - 4} fill="#4A90D9" fontSize="9" textAnchor="middle" fontWeight="bold">blocked</text>
                         )}
                       </g>
                     );
@@ -225,19 +228,72 @@ function SimulationCard({ result, users, edges }: { result: ContainmentResult, u
                     const protected_ = protectedSet.has(node.id);
                     const isSource = node.id === authorId;
                     return (
-                      <g key={node.id}
-                        onMouseEnter={() => setHoveredUserRight(node.user)}
-                        onMouseLeave={() => setHoveredUserRight(null)}
-                      >
-                        <circle cx={node.x} cy={node.y} r={isSource ? 8 : (protected_ ? 8 : 6)} fill={infected ? '#E8453C' : protected_ ? '#2ECC71' : (COMMUNITY_COLORS[node.user.community] ?? '#9CA3AF')} stroke={protected_ ? '#2ECC71' : '#111'} strokeWidth={protected_ ? 2 : 1} className={cn("transition-all duration-300 cursor-pointer", infected && "drop-shadow-[0_0_6px_#E8453C]")} />
-                        {protected_ && <text x={node.x} y={node.y + 3} fontSize="8" textAnchor="middle" fill="#000">🛡</text>}
+                      <g key={node.id} onMouseEnter={() => setHoveredUserRight(node.user)} onMouseLeave={() => setHoveredUserRight(null)}>
+                        <circle cx={node.x} cy={node.y} r={isSource ? 8 : (protected_ ? 8 : 6)} fill={infected ? '#E8453C' : protected_ ? '#4A90D9' : (COMMUNITY_COLORS[node.user.community] ?? '#9CA3AF')} stroke={protected_ ? '#4A90D9' : '#111'} strokeWidth={protected_ ? 2 : 1} className={cn("transition-all duration-300 cursor-pointer", infected && "drop-shadow-[0_0_6px_#E8453C]")} />
+                        {protected_ && <text x={node.x} y={node.y + 3} fontSize="8" textAnchor="middle" fill="#fff">🛡</text>}
                       </g>
                     );
                   })}
                 </svg>
-                <div className="mt-2 text-[11px] text-textSecondary bg-surface/50 border border-borderColor rounded p-1.5 h-8 flex items-center justify-center text-center overflow-hidden">
+                <div className="mt-2 text-[11px] text-textSecondary bg-surface/50 border border-borderColor rounded p-1.5 h-7 flex items-center justify-center text-center overflow-hidden">
                   {hoveredUserRight
-                    ? <span className="flex gap-2"><span className="w-2 h-2 rounded-full mt-0.5 shrink-0" style={{ backgroundColor: COMMUNITY_COLORS[hoveredUserRight.community] }} /><strong>{hoveredUserRight.name}</strong> · <strong className={protectedSet.has(hoveredUserRight.id) ? 'text-shieldGreen' : rightInfected.has(hoveredUserRight.id) ? 'text-shieldRed' : 'text-textSecondary'}>{protectedSet.has(hoveredUserRight.id) ? '🛡 Shielded' : rightInfected.has(hoveredUserRight.id) ? 'Infected' : 'Safe'}</strong></span>
+                    ? <span className="flex gap-2"><span className="w-2 h-2 rounded-full mt-0.5 shrink-0" style={{ backgroundColor: COMMUNITY_COLORS[hoveredUserRight.community] }} /><strong>{hoveredUserRight.name}</strong> · <strong className={protectedSet.has(hoveredUserRight.id) ? 'text-shieldBlue' : rightInfected.has(hoveredUserRight.id) ? 'text-shieldRed' : 'text-textSecondary'}>{protectedSet.has(hoveredUserRight.id) ? '🛡 Shielded' : rightInfected.has(hoveredUserRight.id) ? 'Infected' : 'Safe'}</strong></span>
+                    : <span className="flex items-center gap-1"><Info className="w-3 h-3" /> Hover a node</span>
+                  }
+                </div>
+              </div>
+            </div>
+
+            {/* RIGHT — Greedy */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="font-bold text-sm text-textPrimary flex items-center gap-2">
+                    <Shield className="w-4 h-4 text-shieldPurple fill-shieldPurple/20" />
+                    Greedy Shield
+                  </h4>
+                  <p className="text-xs text-textSecondary">Optimal {budgetK} nodes selected</p>
+                </div>
+                <span className="text-xl font-black text-shieldPurple">{greedyInfected.size} <span className="text-xs font-normal text-textSecondary">infected</span></span>
+              </div>
+              <div className="h-2 bg-background border border-borderColor rounded-full overflow-hidden">
+                <div className="h-full bg-shieldPurple transition-all duration-500" style={{ width: `${(greedyInfected.size / Math.max(users.length, 1)) * 100}%` }} />
+              </div>
+              <div className="bg-background border border-borderColor rounded-xl p-3">
+                {result.greedyWaves ? (
+                  <svg viewBox="0 0 400 300" className="w-full h-[240px] bg-background">
+                    {layout.links.map((link, i) => {
+                      const sInfected = greedyInfected.has(link.source);
+                      const tInfected = greedyInfected.has(link.target);
+                      const isActive = sInfected && tInfected;
+                      const isBlocked = sInfected && greedyProtectedSet.has(link.target);
+                      return (
+                        <g key={i}>
+                          <line x1={link.sourceX} y1={link.sourceY} x2={link.targetX} y2={link.targetY} stroke={isActive ? '#E8453C' : '#333'} strokeWidth={isActive ? 2 : 1} opacity={isActive ? 1 : 0.3} strokeDasharray={isBlocked ? "4 4" : "none"} />
+                          {isBlocked && (
+                            <text x={(link.sourceX + link.targetX)/2} y={(link.sourceY + link.targetY)/2 - 4} fill="#9B59B6" fontSize="9" textAnchor="middle" fontWeight="bold">blocked</text>
+                          )}
+                        </g>
+                      );
+                    })}
+                    {layout.nodes.map(node => {
+                      const infected = greedyInfected.has(node.id);
+                      const protected_ = greedyProtectedSet.has(node.id);
+                      const isSource = node.id === authorId;
+                      return (
+                        <g key={node.id} onMouseEnter={() => setHoveredUserGreedy(node.user)} onMouseLeave={() => setHoveredUserGreedy(null)}>
+                          <circle cx={node.x} cy={node.y} r={isSource ? 8 : (protected_ ? 8 : 6)} fill={infected ? '#E8453C' : protected_ ? '#9B59B6' : (COMMUNITY_COLORS[node.user.community] ?? '#9CA3AF')} stroke={protected_ ? '#9B59B6' : '#111'} strokeWidth={protected_ ? 2 : 1} className={cn("transition-all duration-300 cursor-pointer", infected && "drop-shadow-[0_0_6px_#E8453C]")} />
+                          {protected_ && <text x={node.x} y={node.y + 3} fontSize="8" textAnchor="middle" fill="#fff">🎯</text>}
+                        </g>
+                      );
+                    })}
+                  </svg>
+                ) : (
+                  <div className="w-full h-[240px] flex items-center justify-center text-xs text-textSecondary">No greedy data — re-trigger AI check</div>
+                )}
+                <div className="mt-2 text-[11px] text-textSecondary bg-surface/50 border border-borderColor rounded p-1.5 h-7 flex items-center justify-center text-center overflow-hidden">
+                  {hoveredUserGreedy
+                    ? <span className="flex gap-2"><span className="w-2 h-2 rounded-full mt-0.5 shrink-0" style={{ backgroundColor: COMMUNITY_COLORS[hoveredUserGreedy.community] }} /><strong>{hoveredUserGreedy.name}</strong> · <strong className={greedyProtectedSet.has(hoveredUserGreedy.id) ? 'text-shieldPurple' : greedyInfected.has(hoveredUserGreedy.id) ? 'text-shieldRed' : 'text-textSecondary'}>{greedyProtectedSet.has(hoveredUserGreedy.id) ? '🎯 Optimal' : greedyInfected.has(hoveredUserGreedy.id) ? 'Infected' : 'Safe'}</strong></span>
                     : <span className="flex items-center gap-1"><Info className="w-3 h-3" /> Hover a node</span>
                   }
                 </div>
@@ -252,18 +308,22 @@ function SimulationCard({ result, users, edges }: { result: ContainmentResult, u
                 <CheckCircle2 className="w-5 h-5 text-shieldGreen" />
                 <h4 className="font-bold text-textPrimary">Containment Analysis Complete</h4>
               </div>
-              <div className="grid grid-cols-4 gap-4 text-center">
+              <div className="grid grid-cols-4 gap-3 text-center">
                 <div className="bg-surface border border-borderColor rounded-lg p-3">
-                  <p className="text-xs text-textSecondary mb-1">Without Algorithm</p>
+                  <p className="text-xs text-textSecondary mb-1">No Mitigation</p>
                   <p className="text-2xl font-black text-shieldRed">{leftTotal}</p>
                 </div>
-                <div className="bg-surface border border-borderColor rounded-lg p-3">
-                  <p className="text-xs text-textSecondary mb-1">With Algorithm</p>
-                  <p className="text-2xl font-black text-shieldGreen">{rightTotal}</p>
+                <div className="bg-surface border border-shieldBlue/30 rounded-lg p-3">
+                  <p className="text-xs text-textSecondary mb-1">Degree Centrality</p>
+                  <p className="text-2xl font-black text-shieldBlue">{rightTotal}</p>
+                  <p className="text-[10px] text-shieldGreen mt-1">↓ {leftTotal > 0 ? (((leftTotal - rightTotal) / leftTotal) * 100).toFixed(1) : 0}%</p>
                 </div>
-                <div className="bg-surface border border-borderColor rounded-lg p-3">
-                  <p className="text-xs text-textSecondary mb-1">Nodes Saved</p>
-                  <p className="text-2xl font-black text-shieldBlue">{savedPct.toFixed(0)}%</p>
+                <div className="bg-surface border border-shieldPurple/30 rounded-lg p-3">
+                  <p className="text-xs text-textSecondary mb-1">Greedy Algorithm</p>
+                  <p className="text-2xl font-black text-shieldPurple">{result.greedyTotal ?? '—'}</p>
+                  {result.greedyTotal !== undefined && (
+                    <p className="text-[10px] text-shieldGreen mt-1">↓ {leftTotal > 0 ? (((leftTotal - result.greedyTotal) / leftTotal) * 100).toFixed(1) : 0}%</p>
+                  )}
                 </div>
                 <div className="bg-surface border border-borderColor rounded-lg p-3">
                   <p className="text-xs text-textSecondary mb-1">Warnings Sent</p>
@@ -271,7 +331,8 @@ function SimulationCard({ result, users, edges }: { result: ContainmentResult, u
                 </div>
               </div>
               <p className="text-sm text-textSecondary">
-                By immunizing the top <strong>{budgetK}</strong> most-connected accounts, the algorithm blocked <strong>{totalSaved}</strong> additional users from receiving this misinformation.
+                Degree Centrality immunized <strong>{budgetK}</strong> high-degree hubs saving <strong>{Math.max(0, leftTotal - rightTotal)}</strong> users.
+                {result.greedyTotal !== undefined && <> Greedy optimally saved <strong>{Math.max(0, leftTotal - result.greedyTotal)}</strong> users — <strong>{result.greedyTotal <= rightTotal ? 'better than' : 'similar to'}</strong> degree centrality.</>}
               </p>
             </div>
           )}

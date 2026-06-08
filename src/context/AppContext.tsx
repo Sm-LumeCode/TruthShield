@@ -44,14 +44,17 @@ export type ContainmentResult = {
   authorName: string;
   explanation: string;
   leftTotal: number;    // infected without algorithm
-  rightTotal: number;   // infected with algorithm
-  savedPct: number;     // % nodes saved
+  rightTotal: number;   // infected with degree centrality
+  greedyTotal?: number; // infected with greedy algorithm
+  savedPct: number;     // % nodes saved (degree centrality)
   budgetK: number;
   timestamp: Date;
   sharerIds: string[];  // users who had already shared before detection
   leftWaves: string[][];
   rightWaves: string[][];
-  protectedIds: string[];
+  greedyWaves?: string[][];      // waves with greedy protected set
+  protectedIds: string[];        // degree centrality protected nodes
+  greedyProtectedIds?: string[]; // greedy algorithm protected nodes
   authorId: string;
 };
 
@@ -162,10 +165,10 @@ function generateNetworkData() {
 }
 
 // ─── localStorage helpers ────────────────────────────────────────────────────
-const BLOCK_KEY = 'ts_blocks';
-const WARN_KEY  = 'ts_warnings';
-const CR_KEY    = 'ts_containment';
-const POSTS_KEY = 'ts_posts';
+const BLOCK_KEY = 'ts_blocks_v2';
+const WARN_KEY  = 'ts_warnings_v2';
+const CR_KEY    = 'ts_containment_v2';
+const POSTS_KEY = 'ts_posts_v2';
 
 function loadJSON<T>(key: string, fallback: T): T {
   try { return JSON.parse(localStorage.getItem(key) || 'null') ?? fallback; } catch { return fallback; }
@@ -329,15 +332,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const flagPost = (postId: string): { shouldRunAI: boolean } => {
     if (!currentUser) { notify('⚠️ Log in to flag posts'); return { shouldRunAI: false }; }
-    let shouldRunAI = false;
+
+    // Compute shouldRunAI synchronously BEFORE calling setPosts,
+    // because setPosts updater runs asynchronously and reading a
+    // variable set inside it would always return the initial value.
+    const currentPost = posts.find(p => p.id === postId);
+    if (!currentPost) return { shouldRunAI: false };
+    if (currentPost.flaggedBy.includes(currentUser.id)) {
+      notify('ℹ️ You already flagged this post');
+      return { shouldRunAI: false };
+    }
+    if (currentPost.authorId === currentUser.id) {
+      notify('⚠️ You cannot flag your own post');
+      return { shouldRunAI: false };
+    }
+
+    const newFlagCount = currentPost.flaggedBy.length + 1;
+    const shouldRunAI = newFlagCount >= 3 && !currentPost.aiChecked;
+
     setPosts(prev => prev.map(p => {
       if (p.id !== postId) return p;
-      if (p.flaggedBy.includes(currentUser.id)) { notify('ℹ️ You already flagged this post'); return p; }
-      if (p.authorId === currentUser.id) { notify('⚠️ You cannot flag your own post'); return p; }
-      const newFlaggedBy = [...p.flaggedBy, currentUser.id];
-      if (newFlaggedBy.length >= 3 && !p.aiChecked) shouldRunAI = true;
-      return { ...p, flaggedBy: newFlaggedBy };
+      return { ...p, flaggedBy: [...p.flaggedBy, currentUser.id] };
     }));
+
     notify(`🚩 Flagged (${shouldRunAI ? 'sending to AI...' : 'needs more flags to trigger AI'})`);
     return { shouldRunAI };
   };
